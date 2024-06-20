@@ -66,6 +66,7 @@ func main() {
 	http.HandleFunc("/manage/delete", deletePods(clientset, namespace, db))
 
 	http.HandleFunc("/test/cpu", testCpu(clientset, namespace, db))
+	http.HandleFunc("/test/memory", testMemory(clientset, namespace, db))
 
 	log.Println("Starting server on :8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
@@ -221,5 +222,27 @@ func testCpu(clientset *kubernetes.Clientset, namespace string, db *sql.DB) func
 		}
 
 		fmt.Fprintln(w, fmt.Sprintf("CPU test started for pod %s", name))
+	}
+}
+
+func testMemory(clientset *kubernetes.Clientset, namespace string, db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Query().Get("name")
+
+		pod, err := clientset.CoreV1().Pods(namespace).Get(context.Background(), name, metav1.GetOptions{})
+		if err != nil {
+			log.Fatal(errors.Wrap(err, "can't get pod"))
+		}
+
+		_, err = db.Exec(
+			"INSERT INTO pod_test (pod_uuid, test) VALUES (?, ?)",
+			schemav1.EnsureUUID(pod.GetUID()),
+			"memory",
+		)
+		if err != nil {
+			log.Fatal(errors.Wrap(err, fmt.Sprintf("can't insert pod %s into database", pod.GetName())))
+		}
+
+		fmt.Fprintln(w, fmt.Sprintf("Memory test started for pod %s", name))
 	}
 }
