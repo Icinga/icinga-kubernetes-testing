@@ -265,7 +265,7 @@ func stopTestCpu(clientset *kubernetes.Clientset, namespace string, db *sql.DB) 
 			"cpu",
 		)
 		if err != nil {
-			log.Fatal(errors.Wrap(err, fmt.Sprintf("can't delete pod %s into database", pod.GetName())))
+			log.Fatal(errors.Wrap(err, fmt.Sprintf("can't delete cpu test for pod %s from database", pod.GetName())))
 		}
 
 		fmt.Fprintln(w, fmt.Sprintf("CPU test stopped for pod %s", name))
@@ -287,7 +287,7 @@ func stopTestMemory(clientset *kubernetes.Clientset, namespace string, db *sql.D
 			"memory",
 		)
 		if err != nil {
-			log.Fatal(errors.Wrap(err, fmt.Sprintf("can't delete pod %s into database", pod.GetName())))
+			log.Fatal(errors.Wrap(err, fmt.Sprintf("can't delete memory test for pod %s from database", pod.GetName())))
 		}
 
 		fmt.Fprintln(w, fmt.Sprintf("Memory test stopped for pod %s", name))
