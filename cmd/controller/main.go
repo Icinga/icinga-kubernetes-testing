@@ -65,8 +65,8 @@ func main() {
 	http.HandleFunc("/manage/wipe", wipePods(clientset, namespace, db))
 	http.HandleFunc("/manage/delete", deletePods(clientset, namespace, db))
 
-	http.HandleFunc("/test/cpu", testCpu(clientset, namespace, db))
-	http.HandleFunc("/test/memory", testMemory(clientset, namespace, db))
+	http.HandleFunc("/test/start/cpu", startTestCpu(clientset, namespace, db))
+	http.HandleFunc("/test/start/memory", startTestMemory(clientset, namespace, db))
 
 	log.Println("Starting server on :8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
@@ -203,7 +203,7 @@ func deletePods(clientset *kubernetes.Clientset, namespace string, db *sql.DB) f
 	}
 }
 
-func testCpu(clientset *kubernetes.Clientset, namespace string, db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
+func startTestCpu(clientset *kubernetes.Clientset, namespace string, db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := r.URL.Query().Get("name")
 
@@ -225,7 +225,7 @@ func testCpu(clientset *kubernetes.Clientset, namespace string, db *sql.DB) func
 	}
 }
 
-func testMemory(clientset *kubernetes.Clientset, namespace string, db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
+func startTestMemory(clientset *kubernetes.Clientset, namespace string, db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := r.URL.Query().Get("name")
 
