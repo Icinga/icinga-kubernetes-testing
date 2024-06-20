@@ -68,6 +68,9 @@ func main() {
 	http.HandleFunc("/test/start/cpu", startTestCpu(clientset, namespace, db))
 	http.HandleFunc("/test/start/memory", startTestMemory(clientset, namespace, db))
 
+	http.HandleFunc("/test/stop/cpu", stopTestCpu(clientset, namespace, db))
+	http.HandleFunc("/test/stop/memory", stopTestMemory(clientset, namespace, db))
+
 	log.Println("Starting server on :8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
 		log.Fatalf("Could not start server: %s\n", err.Error())
@@ -244,5 +247,49 @@ func startTestMemory(clientset *kubernetes.Clientset, namespace string, db *sql.
 		}
 
 		fmt.Fprintln(w, fmt.Sprintf("Memory test started for pod %s", name))
+	}
+}
+
+func stopTestCpu(clientset *kubernetes.Clientset, namespace string, db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Query().Get("name")
+
+		pod, err := clientset.CoreV1().Pods(namespace).Get(context.Background(), name, metav1.GetOptions{})
+		if err != nil {
+			log.Fatal(errors.Wrap(err, "can't get pod"))
+		}
+
+		_, err = db.Exec(
+			"DELETE FROM pod_test WHERE pod_uuid = ? AND test = ?",
+			schemav1.EnsureUUID(pod.GetUID()),
+			"cpu",
+		)
+		if err != nil {
+			log.Fatal(errors.Wrap(err, fmt.Sprintf("can't delete pod %s into database", pod.GetName())))
+		}
+
+		fmt.Fprintln(w, fmt.Sprintf("CPU test stopped for pod %s", name))
+	}
+}
+
+func stopTestMemory(clientset *kubernetes.Clientset, namespace string, db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Query().Get("name")
+
+		pod, err := clientset.CoreV1().Pods(namespace).Get(context.Background(), name, metav1.GetOptions{})
+		if err != nil {
+			log.Fatal(errors.Wrap(err, "can't get pod"))
+		}
+
+		_, err = db.Exec(
+			"DELETE FROM pod_test WHERE pod_uuid = ? AND test = ?",
+			schemav1.EnsureUUID(pod.GetUID()),
+			"memory",
+		)
+		if err != nil {
+			log.Fatal(errors.Wrap(err, fmt.Sprintf("can't delete pod %s into database", pod.GetName())))
+		}
+
+		fmt.Fprintln(w, fmt.Sprintf("Memory test stopped for pod %s", name))
 	}
 }
