@@ -102,7 +102,7 @@ func main() {
 		klog.Fatal(errors.Wrap(err, "can't get Kubernetes clientset"))
 	}
 
-	db, err := sql.Open("mysql", "testing:testing@tcp(icinga-kubernetes-testing-database-service:3306)/testing")
+	db, err := sql.Open("mysql", "testing:testing@tcp(icinga-for-kubernetes-testing-database-service:3306)/testing")
 	if err != nil {
 		klog.Fatal(errors.Wrap(err, "can't connect to database"))
 	}

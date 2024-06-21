@@ -101,13 +101,15 @@ func unregisterTest(db *sql.DB, uuid types.UUID, test string) error {
 }
 
 func cleanSpace(clientset *kubernetes.Clientset, namespace string) error {
-	pods, err := clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{})
+	pods, err := clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{
+		//LabelSelector: contracts.TestingLabel,
+	})
 	if err != nil {
 		return errors.Wrap(err, "Can't list pods")
 	}
 
 	for _, pod := range pods.Items {
-		if strings.Contains(pod.Name, "icinga-kubernetes-testing-tester") {
+		if strings.Contains(pod.Name, "icinga-for-kubernetes-testing-tester") {
 			err = clientset.CoreV1().Pods(namespace).Delete(context.Background(), pod.Name, metav1.DeleteOptions{})
 			if err != nil {
 				return errors.Wrap(err, fmt.Sprintf("Can't delete pod %s", pod.GetName()))
@@ -124,7 +126,7 @@ func main() {
 		klog.Fatal(errors.Wrap(err, "can't get Kubernetes clientset"))
 	}
 
-	db, err := sql.Open("mysql", "testing:testing@tcp(icinga-kubernetes-testing-database-service:3306)/testing")
+	db, err := sql.Open("mysql", "testing:testing@tcp(icinga-for-kubernetes-testing-database-service:3306)/testing")
 	if err != nil {
 		klog.Fatal(errors.Wrap(err, "Can't connect to database"))
 	}
@@ -241,7 +243,7 @@ func wipePods(clientset *kubernetes.Clientset, db *sql.DB, namespace string) fun
 		counter := 0
 
 		for _, pod := range pods.Items {
-			if strings.Contains(pod.Name, "icinga-kubernetes-testing-tester") {
+			if strings.Contains(pod.Name, "icinga-for-kubernetes-testing-tester") {
 				currentPod, err := clientset.CoreV1().Pods(namespace).Get(context.Background(), pod.Name, metav1.GetOptions{})
 				err = clientset.CoreV1().Pods(namespace).Delete(context.Background(), pod.Name, metav1.DeleteOptions{})
 				if err != nil {
@@ -304,7 +306,7 @@ func deletePods(clientset *kubernetes.Clientset, db *sql.DB) func(w http.Respons
 			var namespace, name string
 			err = res.Scan(&namespace, &name)
 
-			if strings.Contains(name, "icinga-kubernetes-testing-controller") {
+			if strings.Contains(name, "icinga-for-testing-controller") {
 				continue
 			}
 			pod, err := clientset.CoreV1().Pods(namespace).Get(context.Background(), name, metav1.GetOptions{})
