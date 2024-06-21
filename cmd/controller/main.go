@@ -5,11 +5,13 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"fmt"
+	"github.com/icinga/icinga-go-library/types"
 	schemav1 "github.com/icinga/icinga-kubernetes/pkg/schema/v1"
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ktypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes"
 	kclientcmd "k8s.io/client-go/tools/clientcmd"
@@ -47,6 +49,57 @@ func getClientset() (*kubernetes.Clientset, error) {
 	return clientset, nil
 }
 
+func checkTestExists(db *sql.DB, podUuid types.UUID, test string) (bool, error) {
+	rows, err := db.Query(
+		"SELECT * FROM pod_test WHERE pod_uuid = ? AND test = ?",
+		podUuid,
+		test,
+	)
+	if err != nil {
+		return false, errors.Wrap(err, "can't execute query")
+	}
+
+	return rows.Next(), nil
+}
+
+func checkPodExists(db *sql.DB, podUuid types.UUID) (bool, error) {
+	rows, err := db.Query(
+		"SELECT * FROM pod WHERE uuid = ?",
+		podUuid,
+	)
+	if err != nil {
+		return false, errors.Wrap(err, "can't execute query")
+	}
+
+	return rows.Next(), nil
+}
+
+func registerTest(db *sql.DB, podUuid types.UUID, test string) error {
+	_, err := db.Exec(
+		"INSERT INTO pod_test (pod_uuid, test) VALUES (?, ?)",
+		podUuid,
+		test,
+	)
+	if err != nil {
+		return errors.Wrap(err, "can't execute insert query")
+	}
+
+	return nil
+}
+
+func unregisterTest(db *sql.DB, podUuid types.UUID, test string) error {
+	_, err := db.Exec(
+		"DELETE FROM pod_test WHERE pod_uuid = ? AND test = ?",
+		podUuid,
+		test,
+	)
+	if err != nil {
+		return errors.Wrap(err, "can't execute delete query")
+	}
+
+	return nil
+}
+
 func main() {
 	clientset, err := getClientset()
 	if err != nil {
@@ -65,11 +118,11 @@ func main() {
 	http.HandleFunc("/manage/wipe", wipePods(clientset, namespace, db))
 	http.HandleFunc("/manage/delete", deletePods(clientset, namespace, db))
 
-	http.HandleFunc("/test/start/cpu", startTestCpu(clientset, namespace, db))
-	http.HandleFunc("/test/start/memory", startTestMemory(clientset, namespace, db))
+	http.HandleFunc("/test/start/cpu", startTestCpu(db))
+	http.HandleFunc("/test/start/memory", startTestMemory(db))
 
-	http.HandleFunc("/test/stop/cpu", stopTestCpu(clientset, namespace, db))
-	http.HandleFunc("/test/stop/memory", stopTestMemory(clientset, namespace, db))
+	http.HandleFunc("/test/stop/cpu", stopTestCpu(db))
+	http.HandleFunc("/test/stop/memory", stopTestMemory(db))
 
 	log.Println("Starting server on :8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
@@ -94,7 +147,7 @@ func createPods(clientset *kubernetes.Clientset, namespace string, db *sql.DB) f
 		limitCpu := r.URL.Query().Get("limitCpu")
 		limitMemory := r.URL.Query().Get("limitMemory")
 
-		fmt.Fprintln(w, requestCpu, requestMemory, limitCpu, limitMemory)
+		_, _ = fmt.Fprintln(w, requestCpu, requestMemory, limitCpu, limitMemory)
 
 		data, err := os.ReadFile("tester.yml")
 		if err != nil {
@@ -140,7 +193,7 @@ func createPods(clientset *kubernetes.Clientset, namespace string, db *sql.DB) f
 			}
 		}
 
-		fmt.Fprintln(w, fmt.Sprintf("%d Pods created", n))
+		_, _ = fmt.Fprintln(w, fmt.Sprintf("%d Pods created", n))
 	}
 }
 
@@ -172,7 +225,7 @@ func wipePods(clientset *kubernetes.Clientset, namespace string, db *sql.DB) fun
 			}
 		}
 
-		fmt.Fprintln(w, fmt.Sprintf("%d Pods wiped", counter))
+		_, _ = fmt.Fprintln(w, fmt.Sprintf("%d Pods wiped", counter))
 	}
 }
 
@@ -202,94 +255,150 @@ func deletePods(clientset *kubernetes.Clientset, namespace string, db *sql.DB) f
 			}
 		}
 
-		fmt.Fprintln(w, fmt.Sprintf("%d Pods deleted", counter))
+		_, _ = fmt.Fprintln(w, fmt.Sprintf("%d Pods deleted", counter))
 	}
 }
 
-func startTestCpu(clientset *kubernetes.Clientset, namespace string, db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
+func startTestCpu(db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		name := r.URL.Query().Get("name")
+		podUuid := schemav1.EnsureUUID(ktypes.UID(r.URL.Query().Get("uuid")))
 
-		pod, err := clientset.CoreV1().Pods(namespace).Get(context.Background(), name, metav1.GetOptions{})
+		podExists, err := checkPodExists(db, podUuid)
 		if err != nil {
-			log.Fatal(errors.Wrap(err, "can't get pod"))
+			_, _ = fmt.Fprintln(w, "can't check if pod exists")
+			log.Fatal(errors.Wrap(err, "can't check if pod exists"))
 		}
 
-		_, err = db.Exec(
-			"INSERT INTO pod_test (pod_uuid, test) VALUES (?, ?)",
-			schemav1.EnsureUUID(pod.GetUID()),
-			"cpu",
-		)
-		if err != nil {
-			log.Fatal(errors.Wrap(err, fmt.Sprintf("can't insert pod %s into database", pod.GetName())))
+		if !podExists {
+			_, _ = fmt.Fprintln(w, "pod does not exist")
+			log.Fatal(errors.New("pod does not exist"))
 		}
 
-		fmt.Fprintln(w, fmt.Sprintf("CPU test started for pod %s", name))
+		testExists, err := checkTestExists(db, podUuid, "cpu")
+		if err != nil {
+			_, _ = fmt.Fprintln(w, "can't check if test exists")
+			log.Fatal(errors.Wrap(err, "can't check if test exists"))
+		}
+
+		if testExists {
+			_, _ = fmt.Fprintln(w, "test already exists")
+			log.Fatal(errors.New("test already exists"))
+		}
+
+		err = registerTest(db, podUuid, "cpu")
+		if err != nil {
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("can't register cpu test for pod uuid %s", podUuid.String()))
+			log.Fatal(errors.Wrap(err, fmt.Sprintf("can't register cpu test for pod uuid %s", podUuid.String())))
+		}
+
+		_, _ = fmt.Fprintln(w, fmt.Sprintf("CPU test started for pod uuid %s", podUuid.String()))
 	}
 }
 
-func startTestMemory(clientset *kubernetes.Clientset, namespace string, db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
+func startTestMemory(db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		name := r.URL.Query().Get("name")
+		podUuid := schemav1.EnsureUUID(ktypes.UID(r.URL.Query().Get("uuid")))
 
-		pod, err := clientset.CoreV1().Pods(namespace).Get(context.Background(), name, metav1.GetOptions{})
+		podExists, err := checkPodExists(db, podUuid)
 		if err != nil {
-			log.Fatal(errors.Wrap(err, "can't get pod"))
+			_, _ = fmt.Fprintln(w, "can't check if pod exists")
+			log.Fatal(errors.Wrap(err, "can't check if pod exists"))
 		}
 
-		_, err = db.Exec(
-			"INSERT INTO pod_test (pod_uuid, test) VALUES (?, ?)",
-			schemav1.EnsureUUID(pod.GetUID()),
-			"memory",
-		)
-		if err != nil {
-			log.Fatal(errors.Wrap(err, fmt.Sprintf("can't insert pod %s into database", pod.GetName())))
+		if !podExists {
+			_, _ = fmt.Fprintln(w, "pod does not exist")
+			log.Fatal(errors.New("pod does not exist"))
 		}
 
-		fmt.Fprintln(w, fmt.Sprintf("Memory test started for pod %s", name))
+		testExists, err := checkTestExists(db, podUuid, "memory")
+		if err != nil {
+			_, _ = fmt.Fprintln(w, "can't check if test exists")
+			log.Fatal(errors.Wrap(err, "can't check if test exists"))
+		}
+
+		if testExists {
+			_, _ = fmt.Fprintln(w, "test already exists")
+			log.Fatal(errors.New("test already exists"))
+		}
+
+		err = registerTest(db, podUuid, "memory")
+		if err != nil {
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("can't register memory test for pod uuid %s", podUuid.String()))
+			log.Fatal(errors.Wrap(err, fmt.Sprintf("can't register memory test for pod uuid %s", podUuid.String())))
+		}
+
+		_, _ = fmt.Fprintln(w, fmt.Sprintf("Memory test started for pod uuid %s", podUuid.String()))
 	}
 }
 
-func stopTestCpu(clientset *kubernetes.Clientset, namespace string, db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
+func stopTestCpu(db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		name := r.URL.Query().Get("name")
+		podUuid := schemav1.EnsureUUID(ktypes.UID(r.URL.Query().Get("uuid")))
 
-		pod, err := clientset.CoreV1().Pods(namespace).Get(context.Background(), name, metav1.GetOptions{})
+		podExists, err := checkPodExists(db, podUuid)
 		if err != nil {
-			log.Fatal(errors.Wrap(err, "can't get pod"))
+			_, _ = fmt.Fprintln(w, "can't check if pod exists")
+			log.Fatal(errors.Wrap(err, "can't check if pod exists"))
 		}
 
-		_, err = db.Exec(
-			"DELETE FROM pod_test WHERE pod_uuid = ? AND test = ?",
-			schemav1.EnsureUUID(pod.GetUID()),
-			"cpu",
-		)
-		if err != nil {
-			log.Fatal(errors.Wrap(err, fmt.Sprintf("can't delete cpu test for pod %s from database", pod.GetName())))
+		if !podExists {
+			_, _ = fmt.Fprintln(w, "pod does not exist")
+			log.Fatal(errors.New("pod does not exist"))
 		}
 
-		fmt.Fprintln(w, fmt.Sprintf("CPU test stopped for pod %s", name))
+		testExists, err := checkTestExists(db, podUuid, "cpu")
+		if err != nil {
+			_, _ = fmt.Fprintln(w, "can't check if test exists")
+			log.Fatal(errors.Wrap(err, "can't check if test exists"))
+		}
+
+		if !testExists {
+			_, _ = fmt.Fprintln(w, "test does not exist")
+			log.Fatal(errors.New("test does not exist"))
+		}
+
+		err = unregisterTest(db, podUuid, "cpu")
+		if err != nil {
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("can't unregister cpu test for pod uuid %s", podUuid.String()))
+			log.Fatal(errors.Wrap(err, fmt.Sprintf("can't unregister cpu test for pod uuid %s", podUuid.String())))
+		}
+
+		_, _ = fmt.Fprintln(w, fmt.Sprintf("CPU test stopped for pod uuid %s", podUuid.String()))
 	}
 }
 
-func stopTestMemory(clientset *kubernetes.Clientset, namespace string, db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
+func stopTestMemory(db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		name := r.URL.Query().Get("name")
+		podUuid := schemav1.EnsureUUID(ktypes.UID(r.URL.Query().Get("uuid")))
 
-		pod, err := clientset.CoreV1().Pods(namespace).Get(context.Background(), name, metav1.GetOptions{})
+		podExists, err := checkPodExists(db, podUuid)
 		if err != nil {
-			log.Fatal(errors.Wrap(err, "can't get pod"))
+			_, _ = fmt.Fprintln(w, "can't check if pod exists")
+			log.Fatal(errors.Wrap(err, "can't check if pod exists"))
 		}
 
-		_, err = db.Exec(
-			"DELETE FROM pod_test WHERE pod_uuid = ? AND test = ?",
-			schemav1.EnsureUUID(pod.GetUID()),
-			"memory",
-		)
-		if err != nil {
-			log.Fatal(errors.Wrap(err, fmt.Sprintf("can't delete memory test for pod %s from database", pod.GetName())))
+		if !podExists {
+			_, _ = fmt.Fprintln(w, "pod does not exist")
+			log.Fatal(errors.New("pod does not exist"))
 		}
 
-		fmt.Fprintln(w, fmt.Sprintf("Memory test stopped for pod %s", name))
+		testExists, err := checkTestExists(db, podUuid, "memory")
+		if err != nil {
+			_, _ = fmt.Fprintln(w, "can't check if test exists")
+			log.Fatal(errors.Wrap(err, "can't check if test exists"))
+		}
+
+		if !testExists {
+			_, _ = fmt.Fprintln(w, "test does not exist")
+			log.Fatal(errors.New("test does not exist"))
+		}
+
+		err = unregisterTest(db, podUuid, "memory")
+		if err != nil {
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("can't unregister memory test for pod uuid %s", podUuid.String()))
+			log.Fatal(errors.Wrap(err, fmt.Sprintf("can't unregister memory test for pod uuid %s", podUuid.String())))
+		}
+
+		_, _ = fmt.Fprintln(w, fmt.Sprintf("Memory test stopped for pod uuid %s", podUuid.String()))
 	}
 }
