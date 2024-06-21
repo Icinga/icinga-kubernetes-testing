@@ -15,7 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes"
 	kclientcmd "k8s.io/client-go/tools/clientcmd"
-	"log"
+	"k8s.io/klog/v2"
 	"math/big"
 	"net/http"
 	"os"
@@ -38,12 +38,12 @@ func getClientset() (*kubernetes.Clientset, error) {
 	kconfig, err := kclientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		kclientcmd.NewDefaultClientConfigLoadingRules(), &kclientcmd.ConfigOverrides{}).ClientConfig()
 	if err != nil {
-		return nil, errors.Wrap(err, "can't configure Kubernetes client")
+		return nil, errors.Wrap(err, "Can't configure Kubernetes client")
 	}
 
 	clientset, err := kubernetes.NewForConfig(kconfig)
 	if err != nil {
-		return nil, errors.Wrap(err, "can't create Kubernetes client")
+		return nil, errors.Wrap(err, "Can't create Kubernetes client")
 	}
 
 	return clientset, nil
@@ -56,7 +56,7 @@ func checkTestExists(db *sql.DB, podUuid types.UUID, test string) (bool, error) 
 		test,
 	)
 	if err != nil {
-		return false, errors.Wrap(err, "can't execute query")
+		return false, errors.Wrap(err, "Can't execute query")
 	}
 
 	return rows.Next(), nil
@@ -68,7 +68,7 @@ func checkPodExists(db *sql.DB, podUuid types.UUID) (bool, error) {
 		podUuid,
 	)
 	if err != nil {
-		return false, errors.Wrap(err, "can't execute query")
+		return false, errors.Wrap(err, "Can't execute query")
 	}
 
 	return rows.Next(), nil
@@ -81,7 +81,7 @@ func registerTest(db *sql.DB, podUuid types.UUID, test string) error {
 		test,
 	)
 	if err != nil {
-		return errors.Wrap(err, "can't execute insert query")
+		return errors.Wrap(err, "Can't execute insert query")
 	}
 
 	return nil
@@ -94,7 +94,7 @@ func unregisterTest(db *sql.DB, podUuid types.UUID, test string) error {
 		test,
 	)
 	if err != nil {
-		return errors.Wrap(err, "can't execute delete query")
+		return errors.Wrap(err, "Can't execute delete query")
 	}
 
 	return nil
@@ -103,12 +103,12 @@ func unregisterTest(db *sql.DB, podUuid types.UUID, test string) error {
 func main() {
 	clientset, err := getClientset()
 	if err != nil {
-		log.Fatal(errors.Wrap(err, "can't get Kubernetes clientset"))
+		klog.Fatal(errors.Wrap(err, "can't get Kubernetes clientset"))
 	}
 
 	db, err := sql.Open("mysql", "testing:testing@tcp(icinga-kubernetes-testing-database-service:3306)/testing")
 	if err != nil {
-		log.Fatal(errors.Wrap(err, "can't connect to database"))
+		klog.Fatal(errors.Wrap(err, "Can't connect to database"))
 	}
 	defer db.Close()
 
@@ -124,9 +124,9 @@ func main() {
 	http.HandleFunc("/test/stop/cpu", stopTestCpu(db))
 	http.HandleFunc("/test/stop/memory", stopTestMemory(db))
 
-	log.Println("Starting server on :8080")
+	klog.Info("Starting server on :8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
-		log.Fatalf("Could not start server: %s\n", err.Error())
+		klog.Fatalf("Could not start server: %s\n", err.Error())
 	}
 }
 
@@ -139,7 +139,9 @@ func createPods(clientset *kubernetes.Clientset, namespace string, db *sql.DB) f
 
 		n, err := strconv.Atoi(nParam)
 		if err != nil {
-			log.Fatal(errors.Wrap(err, "can't parse parameter \"n\""))
+			_, _ = fmt.Fprintln(w, "Can't parse parameter \"n\"")
+			klog.Error(errors.Wrap(err, "Can't parse parameter \"n\""))
+			return
 		}
 
 		requestCpu := r.URL.Query().Get("requestCpu")
@@ -151,13 +153,17 @@ func createPods(clientset *kubernetes.Clientset, namespace string, db *sql.DB) f
 
 		data, err := os.ReadFile("tester.yml")
 		if err != nil {
-			log.Fatal(errors.Wrap(err, "can't read file"))
+			_, _ = fmt.Fprintln(w, "Can't read tester resource file")
+			klog.Error(errors.Wrap(err, "Can't read tester resource file"))
+			return
 		}
 
 		var pod corev1.Pod
 		err = yaml.Unmarshal(data, &pod)
 		if err != nil {
-			log.Fatal(errors.Wrap(err, "error unmarshalling yaml"))
+			_, _ = fmt.Fprintln(w, "Can't unmarshal tester resource yaml")
+			klog.Error(errors.Wrap(err, "Can't unmarshal tester resource yaml"))
+			return
 		}
 
 		for i := 0; i < n; i++ {
@@ -179,7 +185,9 @@ func createPods(clientset *kubernetes.Clientset, namespace string, db *sql.DB) f
 
 			createdPod, err := clientset.CoreV1().Pods(namespace).Create(context.Background(), &currentPod, metav1.CreateOptions{})
 			if err != nil {
-				log.Fatal(errors.Wrap(err, "can't create deployment"))
+				_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't create pod %s", currentPod.GetName()))
+				klog.Error(errors.Wrap(err, fmt.Sprintf("Can't create pod %s", currentPod.GetName())))
+				return
 			}
 
 			_, err = db.Exec(
@@ -189,7 +197,9 @@ func createPods(clientset *kubernetes.Clientset, namespace string, db *sql.DB) f
 				createdPod.GetName(),
 			)
 			if err != nil {
-				log.Fatal(errors.Wrap(err, fmt.Sprintf("can't insert pod %s into database", createdPod.GetName())))
+				_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't insert pod %s into database", createdPod.GetName()))
+				klog.Error(errors.Wrap(err, fmt.Sprintf("Can't insert pod %s into database", createdPod.GetName())))
+				return
 			}
 		}
 
@@ -201,7 +211,9 @@ func wipePods(clientset *kubernetes.Clientset, namespace string, db *sql.DB) fun
 	return func(w http.ResponseWriter, r *http.Request) {
 		pods, err := clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{})
 		if err != nil {
-			log.Fatal(errors.Wrap(err, "can't list pods"))
+			_, _ = fmt.Fprintln(w, "Can't list pods")
+			klog.Error(errors.Wrap(err, "Can't list pods"))
+			return
 		}
 
 		counter := 0
@@ -211,7 +223,9 @@ func wipePods(clientset *kubernetes.Clientset, namespace string, db *sql.DB) fun
 				currentPod, err := clientset.CoreV1().Pods(namespace).Get(context.Background(), pod.Name, metav1.GetOptions{})
 				err = clientset.CoreV1().Pods(namespace).Delete(context.Background(), pod.Name, metav1.DeleteOptions{})
 				if err != nil {
-					log.Fatal(errors.Wrap(err, "can't delete pod"))
+					_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't delete pod %s", pod.GetName()))
+					klog.Error(errors.Wrap(err, fmt.Sprintf("Can't delete pod %s", pod.GetName())))
+					return
 				} else {
 					counter++
 					_, err = db.Exec(
@@ -219,7 +233,9 @@ func wipePods(clientset *kubernetes.Clientset, namespace string, db *sql.DB) fun
 						schemav1.EnsureUUID(currentPod.GetUID()),
 					)
 					if err != nil {
-						log.Fatal(errors.Wrap(err, fmt.Sprintf("can't delete pod %s from database", pod.GetName())))
+						_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't delete pod %s from database", pod.GetName()))
+						klog.Error(errors.Wrap(err, fmt.Sprintf("Can't delete pod %s from database", pod.GetName())))
+						return
 					}
 				}
 			}
@@ -242,7 +258,9 @@ func deletePods(clientset *kubernetes.Clientset, namespace string, db *sql.DB) f
 			pod, err := clientset.CoreV1().Pods(namespace).Get(context.Background(), name, metav1.GetOptions{})
 			err = clientset.CoreV1().Pods(namespace).Delete(context.Background(), name, metav1.DeleteOptions{})
 			if err != nil {
-				log.Fatal(errors.Wrap(err, "can't delete pod"))
+				_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't delete pod %s", name))
+				klog.Error(errors.Wrap(err, fmt.Sprintf("Can't delete pod %s", name)))
+				return
 			} else {
 				counter++
 				_, err = db.Exec(
@@ -250,7 +268,9 @@ func deletePods(clientset *kubernetes.Clientset, namespace string, db *sql.DB) f
 					schemav1.EnsureUUID(pod.GetUID()),
 				)
 				if err != nil {
-					log.Fatal(errors.Wrap(err, fmt.Sprintf("can't delete pod %s from database", pod.GetName())))
+					_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't delete pod %s from database", pod.GetName()))
+					klog.Error(errors.Wrap(err, fmt.Sprintf("Can't delete pod %s from database", pod.GetName())))
+					return
 				}
 			}
 		}
@@ -265,33 +285,38 @@ func startTestCpu(db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
 
 		podExists, err := checkPodExists(db, podUuid)
 		if err != nil {
-			_, _ = fmt.Fprintln(w, "can't check if pod exists")
-			log.Fatal(errors.Wrap(err, "can't check if pod exists"))
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't check if pod uuid %s exists", podUuid.String()))
+			klog.Error(errors.Wrap(err, fmt.Sprintf("Can't check if pod uuid %s exists", podUuid.String())))
+			return
 		}
 
 		if !podExists {
-			_, _ = fmt.Fprintln(w, "pod does not exist")
-			log.Fatal(errors.New("pod does not exist"))
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("Pod uuid %s does not exist", podUuid.String()))
+			klog.Error(errors.New(fmt.Sprintf("Pod uuid %s does not exist", podUuid.String())))
+			return
 		}
 
 		testExists, err := checkTestExists(db, podUuid, "cpu")
 		if err != nil {
-			_, _ = fmt.Fprintln(w, "can't check if test exists")
-			log.Fatal(errors.Wrap(err, "can't check if test exists"))
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't check if cpu test exists for pod uuid %s", podUuid.String()))
+			klog.Error(errors.Wrap(err, fmt.Sprintf("Can't check if cpu test exists for pod uuid %s", podUuid.String())))
+			return
 		}
 
 		if testExists {
-			_, _ = fmt.Fprintln(w, "test already exists")
-			log.Fatal(errors.New("test already exists"))
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("Cpu test already started for pod uuid %s", podUuid.String()))
+			klog.Error(errors.New(fmt.Sprintf("Cpu test already started for pod uuid %s", podUuid.String())))
+			return
 		}
 
 		err = registerTest(db, podUuid, "cpu")
 		if err != nil {
-			_, _ = fmt.Fprintln(w, fmt.Sprintf("can't register cpu test for pod uuid %s", podUuid.String()))
-			log.Fatal(errors.Wrap(err, fmt.Sprintf("can't register cpu test for pod uuid %s", podUuid.String())))
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't start cpu test for pod uuid %s", podUuid.String()))
+			klog.Error(errors.Wrap(err, fmt.Sprintf("Can't start cpu test for pod uuid %s", podUuid.String())))
+			return
 		}
 
-		_, _ = fmt.Fprintln(w, fmt.Sprintf("CPU test started for pod uuid %s", podUuid.String()))
+		_, _ = fmt.Fprintln(w, fmt.Sprintf("Cpu test started for pod uuid %s", podUuid.String()))
 	}
 }
 
@@ -301,30 +326,35 @@ func startTestMemory(db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
 
 		podExists, err := checkPodExists(db, podUuid)
 		if err != nil {
-			_, _ = fmt.Fprintln(w, "can't check if pod exists")
-			log.Fatal(errors.Wrap(err, "can't check if pod exists"))
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't check if pod uuid %s exists", podUuid.String()))
+			klog.Error(errors.Wrap(err, fmt.Sprintf("Can't check if pod uuid %s exists", podUuid.String())))
+			return
 		}
 
 		if !podExists {
-			_, _ = fmt.Fprintln(w, "pod does not exist")
-			log.Fatal(errors.New("pod does not exist"))
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("Pod uuid %s does not exist", podUuid.String()))
+			klog.Error(errors.New(fmt.Sprintf("Pod uuid %s does not exist", podUuid.String())))
+			return
 		}
 
 		testExists, err := checkTestExists(db, podUuid, "memory")
 		if err != nil {
-			_, _ = fmt.Fprintln(w, "can't check if test exists")
-			log.Fatal(errors.Wrap(err, "can't check if test exists"))
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't check if memory test exists for pod uuid %s", podUuid.String()))
+			klog.Error(errors.Wrap(err, fmt.Sprintf("Can't check if memory test exists for pod uuid %s", podUuid.String())))
+			return
 		}
 
 		if testExists {
-			_, _ = fmt.Fprintln(w, "test already exists")
-			log.Fatal(errors.New("test already exists"))
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("Memory test already started for pod uuid %s", podUuid.String()))
+			klog.Error(errors.New(fmt.Sprintf("Memory test already started for pod uuid %s", podUuid.String())))
+			return
 		}
 
 		err = registerTest(db, podUuid, "memory")
 		if err != nil {
-			_, _ = fmt.Fprintln(w, fmt.Sprintf("can't register memory test for pod uuid %s", podUuid.String()))
-			log.Fatal(errors.Wrap(err, fmt.Sprintf("can't register memory test for pod uuid %s", podUuid.String())))
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't start memory test for pod uuid %s", podUuid.String()))
+			klog.Error(errors.Wrap(err, fmt.Sprintf("Can't start memory test for pod uuid %s", podUuid.String())))
+			return
 		}
 
 		_, _ = fmt.Fprintln(w, fmt.Sprintf("Memory test started for pod uuid %s", podUuid.String()))
@@ -337,33 +367,38 @@ func stopTestCpu(db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
 
 		podExists, err := checkPodExists(db, podUuid)
 		if err != nil {
-			_, _ = fmt.Fprintln(w, "can't check if pod exists")
-			log.Fatal(errors.Wrap(err, "can't check if pod exists"))
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't check if pod uuid %s exists", podUuid.String()))
+			klog.Error(errors.Wrap(err, fmt.Sprintf("Can't check if pod uuid %s exists", podUuid.String())))
+			return
 		}
 
 		if !podExists {
-			_, _ = fmt.Fprintln(w, "pod does not exist")
-			log.Fatal(errors.New("pod does not exist"))
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("Pod uuid %s does not exist", podUuid.String()))
+			klog.Error(errors.New(fmt.Sprintf("Pod uuid %s does not exist", podUuid.String())))
+			return
 		}
 
 		testExists, err := checkTestExists(db, podUuid, "cpu")
 		if err != nil {
-			_, _ = fmt.Fprintln(w, "can't check if test exists")
-			log.Fatal(errors.Wrap(err, "can't check if test exists"))
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't check if cpu test exists for pod uuid %s", podUuid.String()))
+			klog.Error(errors.Wrap(err, fmt.Sprintf("Can't check if cpu test exists for pod uuid %s", podUuid.String())))
+			return
 		}
 
 		if !testExists {
-			_, _ = fmt.Fprintln(w, "test does not exist")
-			log.Fatal(errors.New("test does not exist"))
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("Cpu test is not running for pod uuid %s", podUuid.String()))
+			klog.Error(errors.New(fmt.Sprintf("Cpu test is not running for pod uuid %s", podUuid.String())))
+			return
 		}
 
 		err = unregisterTest(db, podUuid, "cpu")
 		if err != nil {
-			_, _ = fmt.Fprintln(w, fmt.Sprintf("can't unregister cpu test for pod uuid %s", podUuid.String()))
-			log.Fatal(errors.Wrap(err, fmt.Sprintf("can't unregister cpu test for pod uuid %s", podUuid.String())))
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't stop cpu test for pod uuid %s", podUuid.String()))
+			klog.Error(errors.Wrap(err, fmt.Sprintf("Can't stop cpu test for pod uuid %s", podUuid.String())))
+			return
 		}
 
-		_, _ = fmt.Fprintln(w, fmt.Sprintf("CPU test stopped for pod uuid %s", podUuid.String()))
+		_, _ = fmt.Fprintln(w, fmt.Sprintf("Cpu test stopped for pod uuid %s", podUuid.String()))
 	}
 }
 
@@ -373,30 +408,35 @@ func stopTestMemory(db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
 
 		podExists, err := checkPodExists(db, podUuid)
 		if err != nil {
-			_, _ = fmt.Fprintln(w, "can't check if pod exists")
-			log.Fatal(errors.Wrap(err, "can't check if pod exists"))
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't check if pod uuid %s exists", podUuid.String()))
+			klog.Error(errors.Wrap(err, fmt.Sprintf("Can't check if pod uuid %s exists", podUuid.String())))
+			return
 		}
 
 		if !podExists {
-			_, _ = fmt.Fprintln(w, "pod does not exist")
-			log.Fatal(errors.New("pod does not exist"))
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("Pod uuid %s does not exist", podUuid.String()))
+			klog.Error(errors.New(fmt.Sprintf("Pod uuid %s does not exist", podUuid.String())))
+			return
 		}
 
 		testExists, err := checkTestExists(db, podUuid, "memory")
 		if err != nil {
-			_, _ = fmt.Fprintln(w, "can't check if test exists")
-			log.Fatal(errors.Wrap(err, "can't check if test exists"))
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't check if memory test exists for pod uuid %s", podUuid.String()))
+			klog.Error(errors.Wrap(err, fmt.Sprintf("Can't check if memory test exists for pod uuid %s", podUuid.String())))
+			return
 		}
 
 		if !testExists {
-			_, _ = fmt.Fprintln(w, "test does not exist")
-			log.Fatal(errors.New("test does not exist"))
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("Memory test is not running for pod uuid %s", podUuid.String()))
+			klog.Error(errors.New(fmt.Sprintf("Memory test is not running for pod uuid %s", podUuid.String())))
+			return
 		}
 
 		err = unregisterTest(db, podUuid, "memory")
 		if err != nil {
-			_, _ = fmt.Fprintln(w, fmt.Sprintf("can't unregister memory test for pod uuid %s", podUuid.String()))
-			log.Fatal(errors.Wrap(err, fmt.Sprintf("can't unregister memory test for pod uuid %s", podUuid.String())))
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't stop memory test for pod uuid %s", podUuid.String()))
+			klog.Error(errors.Wrap(err, fmt.Sprintf("Can't stop memory test for pod uuid %s", podUuid.String())))
+			return
 		}
 
 		_, _ = fmt.Fprintln(w, fmt.Sprintf("Memory test stopped for pod uuid %s", podUuid.String()))
