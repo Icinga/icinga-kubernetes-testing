@@ -101,7 +101,9 @@ func unregisterTest(db *sql.DB, uuid types.UUID, test string) error {
 }
 
 func cleanSpace(clientset *kubernetes.Clientset, namespace string) error {
-	pods, err := clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{})
+	pods, err := clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{
+		//LabelSelector: contracts.TestingLabel,
+	})
 	if err != nil {
 		return errors.Wrap(err, "Can't list pods")
 	}

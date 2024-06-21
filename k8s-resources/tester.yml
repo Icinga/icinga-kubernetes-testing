@@ -4,7 +4,7 @@ metadata:
   name: icinga-kubernetes-testing-tester
   namespace: testing
   labels:
-    app: icinga-kubernetes-testing-tester
+    icingaForKubernetesTesting: 1
 spec:
   containers:
     - name: icinga-kubernetes-testing-tester
