@@ -250,6 +250,17 @@ func wipePods(clientset *kubernetes.Clientset, db *sql.DB, namespace string) fun
 					return
 				} else {
 					counter++
+
+					_, err = db.Exec(
+						"DELETE FROM pod_test WHERE pod_uuid = ?",
+						schemav1.EnsureUUID(currentPod.GetUID()),
+					)
+					if err != nil {
+						_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't delete tests for pod %s from database", pod.GetName()))
+						klog.Error(errors.Wrap(err, fmt.Sprintf("Can't delete tests for pod %s from database", pod.GetName())))
+						return
+					}
+
 					_, err = db.Exec(
 						"DELETE FROM pod WHERE uuid = ?",
 						schemav1.EnsureUUID(currentPod.GetUID()),
@@ -304,6 +315,17 @@ func deletePods(clientset *kubernetes.Clientset, db *sql.DB) func(w http.Respons
 				return
 			} else {
 				counter++
+
+				_, err = db.Exec(
+					"DELETE FROM pod_test WHERE pod_uuid = ?",
+					podUuid,
+				)
+				if err != nil {
+					_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't delete tests for pod %s from database", pod.GetName()))
+					klog.Error(errors.Wrap(err, fmt.Sprintf("Can't delete tests for pod %s from database", pod.GetName())))
+					return
+				}
+
 				_, err = db.Exec(
 					"DELETE FROM pod WHERE uuid = ?",
 					podUuid,
