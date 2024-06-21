@@ -21,6 +21,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const letterBytes = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -100,6 +101,41 @@ func unregisterTest(db *sql.DB, uuid types.UUID, test string) error {
 	return nil
 }
 
+func warmupDatabase(clientset *kubernetes.Clientset, db *sql.DB, namespace string) error {
+	pods, err := clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return errors.Wrap(err, "Can't list pods")
+	}
+
+	for i := 0; ; i++ {
+		if i >= 10 {
+			return errors.New("Can't connect to database")
+		}
+		if err := db.Ping(); err == nil {
+			break
+		}
+		klog.Info("Waiting for database to be ready")
+		time.Sleep(2 * time.Second)
+	}
+
+	for _, pod := range pods.Items {
+		klog.Info(pod.Name)
+		if strings.Contains(pod.Name, "icinga-kubernetes-testing-tester") {
+			_, err = db.Exec(
+				"INSERT INTO pod (uuid, namespace, name) VALUES (?, ?, ?)",
+				schemav1.EnsureUUID(pod.GetUID()),
+				pod.GetNamespace(),
+				pod.GetName(),
+			)
+			if err != nil {
+				return errors.Wrap(err, fmt.Sprintf("Can't insert pod %s into database", pod.GetName()))
+			}
+		}
+	}
+
+	return nil
+}
+
 func main() {
 	clientset, err := getClientset()
 	if err != nil {
@@ -113,6 +149,10 @@ func main() {
 	defer db.Close()
 
 	namespace := "testing"
+
+	if err = warmupDatabase(clientset, db, namespace); err != nil {
+		klog.Fatal(errors.Wrap(err, "Can't warmup database"))
+	}
 
 	http.HandleFunc("/manage/create", createPods(clientset, namespace, db))
 	http.HandleFunc("/manage/wipe", wipePods(clientset, namespace, db))
