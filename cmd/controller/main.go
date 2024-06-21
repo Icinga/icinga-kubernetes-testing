@@ -136,8 +136,8 @@ func main() {
 		klog.Fatal(errors.Wrap(err, "Can't clean space"))
 	}
 
-	http.HandleFunc("/manage/create", createPods(clientset, namespace, db))
-	http.HandleFunc("/manage/wipe", wipePods(clientset, namespace, db))
+	http.HandleFunc("/manage/create", createPods(clientset, db, namespace))
+	http.HandleFunc("/manage/wipe", wipePods(clientset, db, namespace))
 	http.HandleFunc("/manage/delete", deletePods(clientset, db))
 
 	http.HandleFunc("/test/start/cpu", startTestCpu(db))
@@ -152,7 +152,7 @@ func main() {
 	}
 }
 
-func createPods(clientset *kubernetes.Clientset, namespace string, db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
+func createPods(clientset *kubernetes.Clientset, db *sql.DB, namespace string) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		nParam := r.URL.Query().Get("n")
 		if nParam == "" {
@@ -229,7 +229,7 @@ func createPods(clientset *kubernetes.Clientset, namespace string, db *sql.DB) f
 	}
 }
 
-func wipePods(clientset *kubernetes.Clientset, namespace string, db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
+func wipePods(clientset *kubernetes.Clientset, db *sql.DB, namespace string) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		pods, err := clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{})
 		if err != nil {
