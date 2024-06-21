@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/icinga/icinga-go-library/types"
+	icingav1 "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/v1"
 	"github.com/icinga/icinga-kubernetes-testing/pkg/contracts"
 	schemav1 "github.com/icinga/icinga-kubernetes/pkg/schema/v1"
 	"github.com/pkg/errors"
@@ -124,6 +125,26 @@ func main() {
 	if err != nil {
 		klog.Fatal(errors.Wrap(err, "can't get Kubernetes clientset"))
 	}
+
+	newTest := &icingav1.TestType{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-test",
+			Namespace: "default",
+		},
+		Spec: icingav1.TestSpec{
+			CronSpec: "*/1 * * * *",
+			Image:    "nginx:latest",
+			Replicas: 3,
+		},
+	}
+
+	result, err := clientset.IcingaV1().Tests("default").Create(context.Background(), newTest, metav1.CreateOptions{})
+	if err != nil {
+		klog.Fatal(errors.Wrap(err, "Can't create custom resource test"))
+	}
+	klog.Info("Created custom resource test")
+
+	os.Exit(0)
 
 	db, err := sql.Open("mysql", "testing:testing@tcp(icinga-for-kubernetes-testing-database-service:3306)/testing")
 	if err != nil {
