@@ -116,7 +116,7 @@ func main() {
 
 	http.HandleFunc("/manage/create", createPods(clientset, namespace, db))
 	http.HandleFunc("/manage/wipe", wipePods(clientset, namespace, db))
-	http.HandleFunc("/manage/delete", deletePods(clientset, namespace, db))
+	http.HandleFunc("/manage/delete", deletePods(clientset, db))
 
 	http.HandleFunc("/test/start/cpu", startTestCpu(db))
 	http.HandleFunc("/test/start/memory", startTestMemory(db))
@@ -245,13 +245,32 @@ func wipePods(clientset *kubernetes.Clientset, namespace string, db *sql.DB) fun
 	}
 }
 
-func deletePods(clientset *kubernetes.Clientset, namespace string, db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
+func deletePods(clientset *kubernetes.Clientset, db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		namesParam := r.URL.Query().Get("names")
-		names := strings.Split(namesParam, ",")
+		uuids := strings.Split(r.URL.Query().Get("uuids"), ",")
 		counter := 0
 
-		for _, name := range names {
+		for _, uuid := range uuids {
+			podUuid := schemav1.EnsureUUID(ktypes.UID(uuid))
+			res, err := db.Query(
+				"SELECT namespace, name FROM pod WHERE uuid = ?",
+				podUuid,
+			)
+			if err != nil {
+				_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't query pod with uuid %s", uuid))
+				klog.Error(errors.Wrap(err, fmt.Sprintf("Can't query pod with uuid %s", uuid)))
+				return
+			}
+
+			if !res.Next() {
+				_, _ = fmt.Fprintln(w, fmt.Sprintf("Pod with uuid %s does not exist", uuid))
+				klog.Error(errors.New(fmt.Sprintf("Pod with uuid %s does not exist", uuid)))
+				return
+			}
+
+			var namespace, name string
+			err = res.Scan(&namespace, &name)
+
 			if strings.Contains(name, "icinga-kubernetes-testing-controller") {
 				continue
 			}
@@ -265,7 +284,7 @@ func deletePods(clientset *kubernetes.Clientset, namespace string, db *sql.DB) f
 				counter++
 				_, err = db.Exec(
 					"DELETE FROM pod WHERE uuid = ?",
-					schemav1.EnsureUUID(pod.GetUID()),
+					podUuid,
 				)
 				if err != nil {
 					_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't delete pod %s from database", pod.GetName()))
