@@ -15,12 +15,63 @@ spec:
             spec:
               type: object
               properties:
-                cronSpec:
-                  type: string
-                image:
-                  type: string
-                replicas:
-                  type: integer
+                containers:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      image:
+                        type: string
+                      imagePullPolicy:
+                        type: string
+                      ports:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            containerPort:
+                              type: integer
+                            name:
+                              type: string
+                      readinessProbe:
+                        type: object
+                        properties:
+                          httpGet:
+                            type: object
+                            properties:
+                              path:
+                                type: string
+                              port:
+                                type: integer
+                      livenessProbe:
+                        type: object
+                        properties:
+                          httpGet:
+                            type: object
+                            properties:
+                              path:
+                                type: string
+                              port:
+                                type: integer
+                      resources:
+                        type: object
+                        properties:
+                          requests:
+                            type: object
+                            properties:
+                              cpu:
+                                type: string
+                              memory:
+                                type: string
+                          limits:
+                            type: object
+                            properties:
+                              cpu:
+                                type: string
+                              memory:
+                                type: string
   scope: Namespaced
   names:
     kind: Test

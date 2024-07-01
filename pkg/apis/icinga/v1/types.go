@@ -1,15 +1,14 @@
 package v1
 
 import (
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // TestSpec defines the desired state of Test
 type TestSpec struct {
-	CronSpec string `json:"cronSpec"`
-	Image    string `json:"image"`
-	Replicas int    `json:"replicas"`
+	Containers []v1.Container
 }
 
 // +genclient
