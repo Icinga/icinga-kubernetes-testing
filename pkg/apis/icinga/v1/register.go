@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	GroupName = "icinga.org"
+	GroupName = "icinga.com"
 	Version   = "v1"
 )
 
@@ -34,13 +34,7 @@ func Resource(resource string) schema.GroupResource {
 func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(
 		SchemeGroupVersion,
-		&TestType{},
-		&TestTypeList{},
-	)
-
-	scheme.AddKnownTypes(
-		SchemeGroupVersion,
-		&metav1.Status{},
+		&Test{},
 	)
 
 	metav1.AddToGroupVersion(

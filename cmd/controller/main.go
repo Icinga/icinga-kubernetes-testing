@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"github.com/icinga/icinga-go-library/types"
+	icingav1client "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/clientset/versioned"
 	icingav1 "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/v1"
 	"github.com/icinga/icinga-kubernetes-testing/pkg/contracts"
 	schemav1 "github.com/icinga/icinga-kubernetes/pkg/schema/v1"
@@ -49,6 +50,18 @@ func getClientset() (*kubernetes.Clientset, error) {
 	}
 
 	return clientset, nil
+}
+
+func getIcingaClientset() (*icingav1client.Clientset, error) {
+	kconfig, err := kclientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		kclientcmd.NewDefaultClientConfigLoadingRules(), &kclientcmd.ConfigOverrides{}).ClientConfig()
+	if err != nil {
+		return nil, errors.Wrap(err, "Can't configure Kubernetes client")
+	}
+
+	icingaClientset, err := icingav1client.NewForConfig(kconfig)
+
+	return icingaClientset, nil
 }
 
 func checkTestExists(db *sql.DB, uuid types.UUID, test string) (bool, error) {
@@ -126,10 +139,15 @@ func main() {
 		klog.Fatal(errors.Wrap(err, "can't get Kubernetes clientset"))
 	}
 
-	newTest := &icingav1.TestType{
+	icingaClientset, err := getIcingaClientset()
+	if err != nil {
+		klog.Fatal(errors.Wrap(err, "can't get Icinga clientset"))
+	}
+
+	newTest := &icingav1.Test{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "example-test",
-			Namespace: "default",
+			Namespace: "testing",
 		},
 		Spec: icingav1.TestSpec{
 			CronSpec: "*/1 * * * *",
@@ -138,11 +156,11 @@ func main() {
 		},
 	}
 
-	result, err := clientset.IcingaV1().Tests("default").Create(context.Background(), newTest, metav1.CreateOptions{})
+	result, err := icingaClientset.IcingaV1().Tests("testing").Create(context.Background(), newTest, metav1.CreateOptions{})
 	if err != nil {
 		klog.Fatal(errors.Wrap(err, "Can't create custom resource test"))
 	}
-	klog.Info("Created custom resource test")
+	klog.Infof("Created custom resource test %s", result.GetName())
 
 	os.Exit(0)
 

@@ -1,9 +1,9 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: tests.icinga.org
+  name: tests.icinga.com
 spec:
-  group: icinga.org
+  group: icinga.com
   versions:
     - name: v1
       served: true

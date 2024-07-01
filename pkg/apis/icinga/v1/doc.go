@@ -1,4 +1,4 @@
 // +k8s:deepcopy-gen=package
-// +groupName=icinga.org
+// +groupName=icinga.com
 
 package v1
