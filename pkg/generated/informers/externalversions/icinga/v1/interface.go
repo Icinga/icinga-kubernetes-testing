@@ -3,7 +3,7 @@
 package v1
 
 import (
-	internalinterfaces "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/informers/externalversions/internalinterfaces"
+	internalinterfaces "github.com/icinga/icinga-kubernetes-testing/pkg/generated/informers/externalversions/internalinterfaces"
 )
 
 // Interface provides access to all the informers in this group version.

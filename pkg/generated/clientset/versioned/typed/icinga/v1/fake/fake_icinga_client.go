@@ -3,7 +3,7 @@
 package fake
 
 import (
-	v1 "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/clientset/versioned/typed/icinga/v1"
+	v1 "github.com/icinga/icinga-kubernetes-testing/pkg/generated/clientset/versioned/typed/icinga/v1"
 	rest "k8s.io/client-go/rest"
 	testing "k8s.io/client-go/testing"
 )

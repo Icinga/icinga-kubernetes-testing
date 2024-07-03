@@ -5,8 +5,8 @@ package v1
 import (
 	"net/http"
 
-	"github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/clientset/versioned/scheme"
 	v1 "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/v1"
+	"github.com/icinga/icinga-kubernetes-testing/pkg/generated/clientset/versioned/scheme"
 	rest "k8s.io/client-go/rest"
 )
 

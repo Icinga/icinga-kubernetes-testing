@@ -1,5 +1,5 @@
-apiVersion: icinga.com/v1
-kind: Test
+apiVersion: v1
+kind: Pod
 metadata:
   name: icinga-for-kubernetes-testing-tester
   namespace: testing

@@ -4,74 +4,6 @@ metadata:
   name: tests.icinga.com
 spec:
   group: icinga.com
-  versions:
-    - name: v1
-      served: true
-      storage: true
-      schema:
-        openAPIV3Schema:
-          type: object
-          properties:
-            spec:
-              type: object
-              properties:
-                containers:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      name:
-                        type: string
-                      image:
-                        type: string
-                      imagePullPolicy:
-                        type: string
-                      ports:
-                        type: array
-                        items:
-                          type: object
-                          properties:
-                            containerPort:
-                              type: integer
-                            name:
-                              type: string
-                      readinessProbe:
-                        type: object
-                        properties:
-                          httpGet:
-                            type: object
-                            properties:
-                              path:
-                                type: string
-                              port:
-                                type: integer
-                      livenessProbe:
-                        type: object
-                        properties:
-                          httpGet:
-                            type: object
-                            properties:
-                              path:
-                                type: string
-                              port:
-                                type: integer
-                      resources:
-                        type: object
-                        properties:
-                          requests:
-                            type: object
-                            properties:
-                              cpu:
-                                type: string
-                              memory:
-                                type: string
-                          limits:
-                            type: object
-                            properties:
-                              cpu:
-                                type: string
-                              memory:
-                                type: string
   scope: Namespaced
   names:
     kind: Test
@@ -80,3 +12,46 @@ spec:
     singular: test
     shortNames:
       - tst
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      subresources:
+        status: { }
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                deploymentName:
+                  type: string
+                tests:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      testKind:
+                        type: string
+                      goodReplicas:
+                        format: int32
+                        type: integer
+                        minimum: 1
+                        maximum: 10
+                      badReplicas:
+                        format: int32
+                        type: integer
+                        minimum: 0
+                        maximum: 10
+                    required:
+                      - testKind
+                      - goodReplicas
+                      - badReplicas
+            status:
+              type: object
+              properties:
+                availableReplicas:
+                  format: int32
+                  type: integer
+                  minimum: 0

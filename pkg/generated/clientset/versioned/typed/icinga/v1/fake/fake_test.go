@@ -85,6 +85,18 @@ func (c *FakeTests) Update(ctx context.Context, test *v1.Test, opts metav1.Updat
 	return obj.(*v1.Test), err
 }
 
+// UpdateStatus was generated because the type contains a Status member.
+// Add a +genclient:noStatus comment above the type to avoid generating UpdateStatus().
+func (c *FakeTests) UpdateStatus(ctx context.Context, test *v1.Test, opts metav1.UpdateOptions) (*v1.Test, error) {
+	obj, err := c.Fake.
+		Invokes(testing.NewUpdateSubresourceAction(testsResource, "status", c.ns, test), &v1.Test{})
+
+	if obj == nil {
+		return nil, err
+	}
+	return obj.(*v1.Test), err
+}
+
 // Delete takes name of the test and deletes it. Returns an error if one occurs.
 func (c *FakeTests) Delete(ctx context.Context, name string, opts metav1.DeleteOptions) error {
 	_, err := c.Fake.

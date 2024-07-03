@@ -6,8 +6,8 @@ import (
 	"context"
 	"time"
 
-	scheme "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/clientset/versioned/scheme"
 	v1 "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/v1"
+	scheme "github.com/icinga/icinga-kubernetes-testing/pkg/generated/clientset/versioned/scheme"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	types "k8s.io/apimachinery/pkg/types"
 	watch "k8s.io/apimachinery/pkg/watch"
@@ -24,6 +24,7 @@ type TestsGetter interface {
 type TestInterface interface {
 	Create(ctx context.Context, test *v1.Test, opts metav1.CreateOptions) (*v1.Test, error)
 	Update(ctx context.Context, test *v1.Test, opts metav1.UpdateOptions) (*v1.Test, error)
+	UpdateStatus(ctx context.Context, test *v1.Test, opts metav1.UpdateOptions) (*v1.Test, error)
 	Delete(ctx context.Context, name string, opts metav1.DeleteOptions) error
 	DeleteCollection(ctx context.Context, opts metav1.DeleteOptions, listOpts metav1.ListOptions) error
 	Get(ctx context.Context, name string, opts metav1.GetOptions) (*v1.Test, error)
@@ -112,6 +113,22 @@ func (c *tests) Update(ctx context.Context, test *v1.Test, opts metav1.UpdateOpt
 		Namespace(c.ns).
 		Resource("tests").
 		Name(test.Name).
+		VersionedParams(&opts, scheme.ParameterCodec).
+		Body(test).
+		Do(ctx).
+		Into(result)
+	return
+}
+
+// UpdateStatus was generated because the type contains a Status member.
+// Add a +genclient:noStatus comment above the type to avoid generating UpdateStatus().
+func (c *tests) UpdateStatus(ctx context.Context, test *v1.Test, opts metav1.UpdateOptions) (result *v1.Test, err error) {
+	result = &v1.Test{}
+	err = c.client.Put().
+		Namespace(c.ns).
+		Resource("tests").
+		Name(test.Name).
+		SubResource("status").
 		VersionedParams(&opts, scheme.ParameterCodec).
 		Body(test).
 		Do(ctx).

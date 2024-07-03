@@ -3,8 +3,8 @@
 package icinga
 
 import (
-	v1 "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/informers/externalversions/icinga/v1"
-	internalinterfaces "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/informers/externalversions/internalinterfaces"
+	v1 "github.com/icinga/icinga-kubernetes-testing/pkg/generated/informers/externalversions/icinga/v1"
+	internalinterfaces "github.com/icinga/icinga-kubernetes-testing/pkg/generated/informers/externalversions/internalinterfaces"
 )
 
 // Interface provides access to each of this group's versions.

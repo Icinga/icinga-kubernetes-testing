@@ -5,12 +5,18 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"fmt"
+	"math/big"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+
+	"github.com/pkg/errors"
+
 	"github.com/icinga/icinga-go-library/types"
-	icingav1client "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/clientset/versioned"
-	icingav1 "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/v1"
 	"github.com/icinga/icinga-kubernetes-testing/pkg/contracts"
 	schemav1 "github.com/icinga/icinga-kubernetes/pkg/schema/v1"
-	"github.com/pkg/errors"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -19,11 +25,9 @@ import (
 	"k8s.io/client-go/kubernetes"
 	kclientcmd "k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
-	"math/big"
-	"net/http"
-	"os"
-	"strconv"
-	"strings"
+
+	icingav1 "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/v1"
+	icingav1client "github.com/icinga/icinga-kubernetes-testing/pkg/generated/clientset/versioned"
 )
 
 const (

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
-	icingav1 "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/clientset/versioned/typed/icinga/v1"
+	icingav1 "github.com/icinga/icinga-kubernetes-testing/pkg/generated/clientset/versioned/typed/icinga/v1"
 	discovery "k8s.io/client-go/discovery"
 	rest "k8s.io/client-go/rest"
 	flowcontrol "k8s.io/client-go/util/flowcontrol"

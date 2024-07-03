@@ -1,24 +1,37 @@
 package v1
 
 import (
-	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+// TestTest defines a test to be run
+type TestTest struct {
+	TestKind     string `json:"testKind"`
+	GoodReplicas *int32 `json:"goodReplicas"`
+	BadReplicas  *int32 `json:"badReplicas"`
+}
+
 // TestSpec defines the desired state of Test
 type TestSpec struct {
-	Containers []v1.Container
+	DeploymentName string     `json:"deploymentName"`
+	Tests          []TestTest `json:"tests"`
+}
+
+type TestStatus struct {
+	AvailableReplicas int32 `json:"availableReplicas"`
 }
 
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:subresource:status
 
 // Test is the Schema for the tests API
 type Test struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
-	Spec              TestSpec `json:"spec"`
+	Spec              TestSpec   `json:"spec"`
+	Status            TestStatus `json:"status"`
 }
 
 // TestList contains a list of Test

@@ -32,7 +32,7 @@ kube::codegen::gen_helpers \
 
 kube::codegen::gen_client \
     --with-watch \
-    --output-dir "${SCRIPT_ROOT}/pkg/apis/icinga" \
-    --output-pkg "${THIS_PKG}/apis/icinga" \
+    --output-dir "${SCRIPT_ROOT}/pkg/generated" \
+    --output-pkg "${THIS_PKG}/generated" \
     --boilerplate "${SCRIPT_ROOT}/hack/boilerplate.go.txt" \
     "${SCRIPT_ROOT}/pkg/apis"

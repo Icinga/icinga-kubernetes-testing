@@ -1,0 +1,15 @@
+---
+apiVersion: icinga.com/v1
+kind: Test
+metadata:
+  name: icinga-for-kubernetes-testing-test
+  namespace: testing
+spec:
+    deploymentName: icinga-for-kubernetes-testing-tester
+    tests:
+      - testKind: cpu
+        goodReplicas: 4
+        badReplicas: 2
+      - testKind: memory
+        goodReplicas: 2
+        badReplicas: 1

@@ -3,9 +3,9 @@
 package fake
 
 import (
-	clientset "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/clientset/versioned"
-	icingav1 "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/clientset/versioned/typed/icinga/v1"
-	fakeicingav1 "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/clientset/versioned/typed/icinga/v1/fake"
+	clientset "github.com/icinga/icinga-kubernetes-testing/pkg/generated/clientset/versioned"
+	icingav1 "github.com/icinga/icinga-kubernetes-testing/pkg/generated/clientset/versioned/typed/icinga/v1"
+	fakeicingav1 "github.com/icinga/icinga-kubernetes-testing/pkg/generated/clientset/versioned/typed/icinga/v1/fake"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/discovery"

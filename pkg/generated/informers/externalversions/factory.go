@@ -7,9 +7,9 @@ import (
 	sync "sync"
 	time "time"
 
-	versioned "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/clientset/versioned"
-	icinga "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/informers/externalversions/icinga"
-	internalinterfaces "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/informers/externalversions/internalinterfaces"
+	versioned "github.com/icinga/icinga-kubernetes-testing/pkg/generated/clientset/versioned"
+	icinga "github.com/icinga/icinga-kubernetes-testing/pkg/generated/informers/externalversions/icinga"
+	internalinterfaces "github.com/icinga/icinga-kubernetes-testing/pkg/generated/informers/externalversions/internalinterfaces"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"

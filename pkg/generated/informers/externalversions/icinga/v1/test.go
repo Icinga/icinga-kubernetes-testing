@@ -6,10 +6,10 @@ import (
 	"context"
 	time "time"
 
-	versioned "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/clientset/versioned"
-	internalinterfaces "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/informers/externalversions/internalinterfaces"
-	v1 "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/listers/icinga/v1"
 	icingav1 "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/v1"
+	versioned "github.com/icinga/icinga-kubernetes-testing/pkg/generated/clientset/versioned"
+	internalinterfaces "github.com/icinga/icinga-kubernetes-testing/pkg/generated/informers/externalversions/internalinterfaces"
+	v1 "github.com/icinga/icinga-kubernetes-testing/pkg/generated/listers/icinga/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	watch "k8s.io/apimachinery/pkg/watch"
