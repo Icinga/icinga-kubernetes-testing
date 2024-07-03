@@ -387,12 +387,9 @@ func deletePods(clientset *kubernetes.Clientset, db *sql.DB) func(w http.Respons
 
 func createTest(clientset *kubernetes.Clientset, icingaClientset *icingav1client.Clientset, namespace string) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		//requestCpu := r.URL.Query().Get("requestCpu")
-		//requestMemory := r.URL.Query().Get("requestMemory")
-		//limitCpu := r.URL.Query().Get("limitCpu")
-		//limitMemory := r.URL.Query().Get("limitMemory")
-		tests := r.URL.Query().Get("tests")
-		if tests == "" {
+		deploymentName := r.URL.Query().Get("deploymentName")
+		tests := strings.Split(r.URL.Query().Get("tests"), ":")
+		if len(tests) == 1 && tests[0] == "" {
 			_, _ = fmt.Fprintln(w, "No tests specified")
 			return
 		}
@@ -408,37 +405,37 @@ func createTest(clientset *kubernetes.Clientset, icingaClientset *icingav1client
 		//	configMap.Data[prefix+strings.ToUpper(test)] = "true"
 		//}
 
-		data, err := os.ReadFile("tester.yml")
-		if err != nil {
-			_, _ = fmt.Fprintln(w, "Can't read tester resource file")
-			klog.Error(errors.Wrap(err, "Can't read tester resource file"))
-			return
+		var testResource *icingav1.Test
+
+		testResource = &icingav1.Test{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "icinga-for-kubernetes-testing-test-" + randString(10),
+				Namespace: namespace,
+			},
+			Spec: icingav1.TestSpec{
+				DeploymentName: deploymentName,
+			},
 		}
 
-		var testResource icingav1.Test
-		err = yaml.Unmarshal(data, &testResource)
-		if err != nil {
-			_, _ = fmt.Fprintln(w, "Can't unmarshal tester resource yaml")
-			klog.Error(errors.Wrap(err, "Can't unmarshal tester resource yaml"))
-			return
+		for _, test := range tests {
+			testKind := strings.Split(test, ",")[0]
+			goodReplicas, _ := strconv.Atoi(strings.Split(test, ",")[1])
+			badReplicas, _ := strconv.Atoi(strings.Split(test, ",")[2])
+
+			// TODO find better solution for this
+			goodReplicas32 := int32(goodReplicas)
+			badReplicas32 := int32(badReplicas)
+
+			testResource.Spec.Tests = append(
+				testResource.Spec.Tests,
+				icingav1.TestTest{
+					TestKind:     testKind,
+					GoodReplicas: &goodReplicas32,
+					BadReplicas:  &badReplicas32,
+				})
 		}
 
-		testResource.ObjectMeta.Name += "-" + randString(10)
-
-		//if requestCpu != "" {
-		//	testResource.Spec.Containers[0].Resources.Requests["cpu"] = resource.MustParse(requestCpu)
-		//}
-		//if requestMemory != "" {
-		//	testResource.Spec.Containers[0].Resources.Requests["memory"] = resource.MustParse(requestMemory)
-		//}
-		//if limitCpu != "" {
-		//	testResource.Spec.Containers[0].Resources.Limits["cpu"] = resource.MustParse(limitCpu)
-		//}
-		//if limitMemory != "" {
-		//	testResource.Spec.Containers[0].Resources.Limits["memory"] = resource.MustParse(limitMemory)
-		//}
-
-		_, err = icingaClientset.IcingaV1().Tests(namespace).Create(context.Background(), &testResource, metav1.CreateOptions{})
+		_, err := icingaClientset.IcingaV1().Tests(namespace).Create(context.Background(), testResource, metav1.CreateOptions{})
 		if err != nil {
 			_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't create test %s", testResource.GetName()))
 			klog.Error(errors.Wrap(err, fmt.Sprintf("Can't create test %s", testResource.GetName())))
