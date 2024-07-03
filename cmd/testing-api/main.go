@@ -347,7 +347,7 @@ func deletePods(clientset *kubernetes.Clientset, db *sql.DB) func(w http.Respons
 			var namespace, name string
 			err = res.Scan(&namespace, &name)
 
-			if strings.Contains(name, "icinga-for-testing-controller") {
+			if strings.Contains(name, "icinga-for-testing-testing-api") {
 				continue
 			}
 			pod, err := clientset.CoreV1().Pods(namespace).Get(context.Background(), name, metav1.GetOptions{})
@@ -387,10 +387,10 @@ func deletePods(clientset *kubernetes.Clientset, db *sql.DB) func(w http.Respons
 
 func createTest(clientset *kubernetes.Clientset, icingaClientset *icingav1client.Clientset, namespace string) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		requestCpu := r.URL.Query().Get("requestCpu")
-		requestMemory := r.URL.Query().Get("requestMemory")
-		limitCpu := r.URL.Query().Get("limitCpu")
-		limitMemory := r.URL.Query().Get("limitMemory")
+		//requestCpu := r.URL.Query().Get("requestCpu")
+		//requestMemory := r.URL.Query().Get("requestMemory")
+		//limitCpu := r.URL.Query().Get("limitCpu")
+		//limitMemory := r.URL.Query().Get("limitMemory")
 		tests := r.URL.Query().Get("tests")
 		if tests == "" {
 			_, _ = fmt.Fprintln(w, "No tests specified")
@@ -425,18 +425,18 @@ func createTest(clientset *kubernetes.Clientset, icingaClientset *icingav1client
 
 		testResource.ObjectMeta.Name += "-" + randString(10)
 
-		if requestCpu != "" {
-			testResource.Spec.Containers[0].Resources.Requests["cpu"] = resource.MustParse(requestCpu)
-		}
-		if requestMemory != "" {
-			testResource.Spec.Containers[0].Resources.Requests["memory"] = resource.MustParse(requestMemory)
-		}
-		if limitCpu != "" {
-			testResource.Spec.Containers[0].Resources.Limits["cpu"] = resource.MustParse(limitCpu)
-		}
-		if limitMemory != "" {
-			testResource.Spec.Containers[0].Resources.Limits["memory"] = resource.MustParse(limitMemory)
-		}
+		//if requestCpu != "" {
+		//	testResource.Spec.Containers[0].Resources.Requests["cpu"] = resource.MustParse(requestCpu)
+		//}
+		//if requestMemory != "" {
+		//	testResource.Spec.Containers[0].Resources.Requests["memory"] = resource.MustParse(requestMemory)
+		//}
+		//if limitCpu != "" {
+		//	testResource.Spec.Containers[0].Resources.Limits["cpu"] = resource.MustParse(limitCpu)
+		//}
+		//if limitMemory != "" {
+		//	testResource.Spec.Containers[0].Resources.Limits["memory"] = resource.MustParse(limitMemory)
+		//}
 
 		_, err = icingaClientset.IcingaV1().Tests(namespace).Create(context.Background(), &testResource, metav1.CreateOptions{})
 		if err != nil {

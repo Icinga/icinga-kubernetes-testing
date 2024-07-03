@@ -64,7 +64,7 @@ func main() {
 	icingaInformerFactory.Start(ctx.Done())
 
 	if err = c.Run(ctx, 2); err != nil {
-		logger.Error(err, "Error running controller")
+		logger.Error(err, "Error running testing-api")
 		klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 	}
 }

@@ -46,7 +46,7 @@ import (
 	listers "github.com/icinga/icinga-kubernetes-testing/pkg/generated/listers/icinga/v1"
 )
 
-const controllerAgentName = "icinga-controller"
+const controllerAgentName = "icinga-testing-api"
 
 const (
 	// SuccessSynced is used as part of the Event 'reason' when a Test is synced
@@ -63,7 +63,7 @@ const (
 	MessageResourceSynced = "Test synced successfully"
 )
 
-// TestController is the controller implementation for Test resources
+// TestController is the testing-api implementation for Test resources
 type TestController struct {
 	// kubeclientset is a standard kubernetes clientset
 	kubeclientset kubernetes.Interface
@@ -86,7 +86,7 @@ type TestController struct {
 	recorder record.EventRecorder
 }
 
-// NewController returns a new sample controller
+// NewController returns a new sample testing-api
 func NewController(
 	ctx context.Context,
 	kubeclientset kubernetes.Interface,
@@ -96,8 +96,8 @@ func NewController(
 	logger := klog.FromContext(ctx)
 
 	// Create event broadcaster
-	// Add sample-controller types to the default Kubernetes Scheme so Events can be
-	// logged for sample-controller types.
+	// Add sample-testing-api types to the default Kubernetes Scheme so Events can be
+	// logged for sample-testing-api types.
 	utilruntime.Must(icingascheme.AddToScheme(scheme.Scheme))
 	logger.V(4).Info("Creating event broadcaster")
 
@@ -163,7 +163,7 @@ func (c *TestController) Run(ctx context.Context, workers int) error {
 	logger := klog.FromContext(ctx)
 
 	// Start the informer factories to begin populating the informer caches
-	logger.Info("Starting Test controller")
+	logger.Info("Starting Test testing-api")
 
 	// Wait for the caches to be synced before starting workers
 	logger.Info("Waiting for informer caches to sync")
@@ -439,8 +439,8 @@ func (c *TestController) handleObject(obj interface{}) {
 // the Test resource that 'owns' it.
 func newDeployment(test *icingav1.Test, replicas *int32, nameSuffix string) *appsv1.Deployment {
 	labels := map[string]string{
-		"app":        "nginx",
-		"controller": test.Name,
+		"app":         "nginx",
+		"testing-api": test.Name,
 	}
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
