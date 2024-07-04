@@ -21,8 +21,19 @@ var (
 )
 
 func init() {
-	flag.StringVar(&kubeconfig, "kubeconfig", "", "Path to a kubeconfig. Only required if out-of-cluster.")
-	flag.StringVar(&masterURL, "master", "", "The address of the Kubernetes API server. Overrides any value in kubeconfig. Only required if out-of-cluster.")
+	flag.StringVar(
+		&kubeconfig,
+		"kubeconfig",
+		"",
+		"Path to a kubeconfig. Only required if out-of-cluster.",
+	)
+	flag.StringVar(
+		&masterURL,
+		"master",
+		"",
+		"The address of the Kubernetes API server. "+
+			"Overrides any value in kubeconfig. Only required if out-of-cluster.",
+	)
 }
 
 func main() {
@@ -58,7 +69,8 @@ func main() {
 		kubeInformerFactory.Apps().V1().Deployments(),
 		icingaInformerFactory.Icinga().V1().Tests())
 
-	// notice that there is no need to run Start methods in a separate goroutine. (i.e. go kubeInformerFactory.Start(ctx.done())
+	// notice that there is no need to run Start methods in a separate goroutine.
+	// (i.e. go kubeInformerFactory.Start(ctx.done())
 	// Start method is non-blocking and runs all registered informers in a dedicated goroutine.
 	kubeInformerFactory.Start(ctx.Done())
 	icingaInformerFactory.Start(ctx.Done())

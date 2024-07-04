@@ -103,7 +103,9 @@ func NewController(
 
 	eventBroadcaster := record.NewBroadcaster(record.WithContext(ctx))
 	eventBroadcaster.StartStructuredLogging(0)
-	eventBroadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: kubeclientset.CoreV1().Events("testing")})
+	eventBroadcaster.StartRecordingToSink(
+		&typedcorev1.EventSinkImpl{Interface: kubeclientset.CoreV1().Events("testing")},
+	)
 	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: controllerAgentName})
 	ratelimiter := workqueue.NewMaxOfRateLimiter(
 		workqueue.NewItemExponentialFailureRateLimiter(5*time.Millisecond, 1000*time.Second),
@@ -289,11 +291,17 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 	for _, t := range test.Spec.Tests {
 
 		// Get the goodDeployment with the name specified in Test.spec
-		goodDeployment, err := c.deploymentsLister.Deployments(test.Namespace).Get(deploymentName + "-good-" + t.TestKind)
+		goodDeployment, err := c.deploymentsLister.Deployments(test.Namespace).Get(
+			deploymentName + "-good-" + t.TestKind,
+		)
 
 		// If the resource doesn't exist, we'll create it
 		if errors.IsNotFound(err) {
-			goodDeployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Create(context.TODO(), newDeployment(test, t.GoodReplicas, "-good-"+t.TestKind), metav1.CreateOptions{})
+			goodDeployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Create(
+				context.TODO(),
+				newDeployment(test, t.GoodReplicas, "-good-"+t.TestKind),
+				metav1.CreateOptions{},
+			)
 		}
 		// If an error occurs during Get/Create, we'll requeue the item so we can
 		// attempt processing again later. This could have been caused by a
@@ -302,10 +310,16 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 			return err
 		}
 
-		badDeployment, err := c.deploymentsLister.Deployments(test.Namespace).Get(deploymentName + "-bad-" + t.TestKind)
+		badDeployment, err := c.deploymentsLister.Deployments(test.Namespace).Get(
+			deploymentName + "-bad-" + t.TestKind,
+		)
 
 		if errors.IsNotFound(err) {
-			badDeployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Create(context.TODO(), newDeployment(test, t.BadReplicas, "-bad-"+t.TestKind), metav1.CreateOptions{})
+			badDeployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Create(
+				context.TODO(),
+				newDeployment(test, t.BadReplicas, "-bad-"+t.TestKind),
+				metav1.CreateOptions{},
+			)
 		}
 
 		if err != nil {
@@ -330,8 +344,18 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 		// number does not equal the current desired replicas on the Deployment, we
 		// should update the Deployment resource.
 		if t.GoodReplicas != nil && *t.GoodReplicas != *goodDeployment.Spec.Replicas {
-			logger.V(4).Info("Update goodDeployment resource", "currentReplicas", *t.GoodReplicas, "desiredReplicas", *goodDeployment.Spec.Replicas)
-			goodDeployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Update(context.TODO(), newDeployment(test, t.GoodReplicas, "-good-"+t.TestKind), metav1.UpdateOptions{})
+			logger.V(4).Info(
+				"Update goodDeployment resource",
+				"currentReplicas",
+				*t.GoodReplicas,
+				"desiredReplicas",
+				*goodDeployment.Spec.Replicas)
+
+			goodDeployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Update(
+				context.TODO(),
+				newDeployment(test, t.GoodReplicas, "-good-"+t.TestKind),
+				metav1.UpdateOptions{},
+			)
 		}
 
 		// If an error occurs during Update, we'll requeue the item so we can
@@ -342,8 +366,19 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 		}
 
 		if t.BadReplicas != nil && *t.BadReplicas != *goodDeployment.Spec.Replicas {
-			logger.V(4).Info("Update goodDeployment resource", "currentReplicas", *t.GoodReplicas, "desiredReplicas", *goodDeployment.Spec.Replicas)
-			badDeployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Update(context.TODO(), newDeployment(test, t.BadReplicas, "-bad-"+t.TestKind), metav1.UpdateOptions{})
+			logger.V(4).Info(
+				"Update goodDeployment resource",
+				"currentReplicas",
+				*t.GoodReplicas,
+				"desiredReplicas",
+				*goodDeployment.Spec.Replicas,
+			)
+
+			badDeployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Update(
+				context.TODO(),
+				newDeployment(test, t.BadReplicas, "-bad-"+t.TestKind),
+				metav1.UpdateOptions{},
+			)
 		}
 
 		if err != nil {
@@ -375,7 +410,11 @@ func (c *TestController) updateTestStatus(test *icingav1.Test, availableReplicas
 	// we must use Update instead of UpdateStatus to update the Status block of the Test resource.
 	// UpdateStatus will not allow changes to the Spec of the resource,
 	// which is ideal for ensuring nothing other than resource status has been updated.
-	_, err := c.icingaclientset.IcingaV1().Tests(test.Namespace).UpdateStatus(context.TODO(), testCopy, metav1.UpdateOptions{})
+	_, err := c.icingaclientset.IcingaV1().Tests(test.Namespace).UpdateStatus(
+		context.TODO(),
+		testCopy,
+		metav1.UpdateOptions{},
+	)
 	return err
 }
 
@@ -425,7 +464,13 @@ func (c *TestController) handleObject(obj interface{}) {
 
 		test, err := c.testsLister.Tests(object.GetNamespace()).Get(ownerRef.Name)
 		if err != nil {
-			logger.V(4).Info("Ignore orphaned object", "object", klog.KObj(object), "test", ownerRef.Name)
+			logger.V(4).Info(
+				"Ignore orphaned object",
+				"object",
+				klog.KObj(object),
+				"test",
+				ownerRef.Name,
+			)
 			return
 		}
 

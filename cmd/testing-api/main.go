@@ -163,7 +163,11 @@ func main() {
 	//	},
 	//}
 	//
-	//result, err := icingaClientset.IcingaV1().Tests("testing").Create(context.Background(), newTest, metav1.CreateOptions{})
+	//result, err := icingaClientset.IcingaV1().Tests("testing").Create(
+	//	context.Background(),
+	//	newTest,
+	//	metav1.CreateOptions{},
+	//)
 	//if err != nil {
 	//	klog.Fatal(errors.Wrap(err, "Can't create custom resource test"))
 	//}
@@ -171,7 +175,10 @@ func main() {
 
 	//os.Exit(0)
 
-	db, err := sql.Open("mysql", "testing:testing@tcp(icinga-for-kubernetes-testing-database-service:3306)/testing")
+	db, err := sql.Open(
+		"mysql",
+		"testing:testing@tcp(icinga-for-kubernetes-testing-database-service:3306)/testing",
+	)
 	if err != nil {
 		klog.Fatal(errors.Wrap(err, "Can't connect to database"))
 	}
@@ -187,7 +194,7 @@ func main() {
 	http.HandleFunc("/manage/wipe", wipePods(clientset, db, namespace))
 	http.HandleFunc("/manage/delete", deletePods(clientset, db))
 
-	http.HandleFunc("/test/create", createTest(clientset, icingaClientset, namespace))
+	http.HandleFunc("/test/create", createTest(icingaClientset, namespace))
 
 	klog.Info("Starting server on :8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
@@ -195,7 +202,11 @@ func main() {
 	}
 }
 
-func createPods(clientset *kubernetes.Clientset, db *sql.DB, namespace string) func(w http.ResponseWriter, r *http.Request) {
+func createPods(
+	clientset *kubernetes.Clientset,
+	db *sql.DB,
+	namespace string,
+) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		nParam := r.URL.Query().Get("n")
 		if nParam == "" {
@@ -248,7 +259,11 @@ func createPods(clientset *kubernetes.Clientset, db *sql.DB, namespace string) f
 				currentPod.Spec.Containers[0].Resources.Limits["memory"] = resource.MustParse(limitMemory)
 			}
 
-			createdPod, err := clientset.CoreV1().Pods(namespace).Create(context.Background(), &currentPod, metav1.CreateOptions{})
+			createdPod, err := clientset.CoreV1().Pods(namespace).Create(
+				context.Background(),
+				&currentPod,
+				metav1.CreateOptions{},
+			)
 			if err != nil {
 				_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't create pod %s", currentPod.GetName()))
 				klog.Error(errors.Wrap(err, fmt.Sprintf("Can't create pod %s", currentPod.GetName())))
@@ -263,7 +278,9 @@ func createPods(clientset *kubernetes.Clientset, db *sql.DB, namespace string) f
 			)
 			if err != nil {
 				_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't insert pod %s into database", createdPod.GetName()))
-				klog.Error(errors.Wrap(err, fmt.Sprintf("Can't insert pod %s into database", createdPod.GetName())))
+				klog.Error(
+					errors.Wrap(err, fmt.Sprintf("Can't insert pod %s into database", createdPod.GetName())),
+				)
 				return
 			}
 		}
@@ -272,7 +289,11 @@ func createPods(clientset *kubernetes.Clientset, db *sql.DB, namespace string) f
 	}
 }
 
-func wipePods(clientset *kubernetes.Clientset, db *sql.DB, namespace string) func(w http.ResponseWriter, r *http.Request) {
+func wipePods(
+	clientset *kubernetes.Clientset,
+	db *sql.DB,
+	namespace string,
+) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		pods, err := clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{
 			LabelSelector: contracts.TestingLabel,
@@ -286,7 +307,11 @@ func wipePods(clientset *kubernetes.Clientset, db *sql.DB, namespace string) fun
 		counter := 0
 
 		for _, pod := range pods.Items {
-			currentPod, err := clientset.CoreV1().Pods(namespace).Get(context.Background(), pod.Name, metav1.GetOptions{})
+			currentPod, err := clientset.CoreV1().Pods(namespace).Get(
+				context.Background(),
+				pod.Name,
+				metav1.GetOptions{},
+			)
 			err = clientset.CoreV1().Pods(namespace).Delete(context.Background(), pod.Name, metav1.DeleteOptions{})
 			if err != nil {
 				_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't delete pod %s", pod.GetName()))
@@ -300,8 +325,16 @@ func wipePods(clientset *kubernetes.Clientset, db *sql.DB, namespace string) fun
 					schemav1.EnsureUUID(currentPod.GetUID()),
 				)
 				if err != nil {
-					_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't delete tests for pod %s from database", pod.GetName()))
-					klog.Error(errors.Wrap(err, fmt.Sprintf("Can't delete tests for pod %s from database", pod.GetName())))
+					_, _ = fmt.Fprintln(
+						w,
+						fmt.Sprintf("Can't delete tests for pod %s from database", pod.GetName()),
+					)
+					klog.Error(
+						errors.Wrap(
+							err,
+							fmt.Sprintf("Can't delete tests for pod %s from database", pod.GetName()),
+						),
+					)
 					return
 				}
 
@@ -311,7 +344,9 @@ func wipePods(clientset *kubernetes.Clientset, db *sql.DB, namespace string) fun
 				)
 				if err != nil {
 					_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't delete pod %s from database", pod.GetName()))
-					klog.Error(errors.Wrap(err, fmt.Sprintf("Can't delete pod %s from database", pod.GetName())))
+					klog.Error(
+						errors.Wrap(err, fmt.Sprintf("Can't delete pod %s from database", pod.GetName())),
+					)
 					return
 				}
 			}
@@ -364,8 +399,16 @@ func deletePods(clientset *kubernetes.Clientset, db *sql.DB) func(w http.Respons
 					podUuid,
 				)
 				if err != nil {
-					_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't delete tests for pod %s from database", pod.GetName()))
-					klog.Error(errors.Wrap(err, fmt.Sprintf("Can't delete tests for pod %s from database", pod.GetName())))
+					_, _ = fmt.Fprintln(
+						w,
+						fmt.Sprintf("Can't delete tests for pod %s from database", pod.GetName()),
+					)
+					klog.Error(
+						errors.Wrap(
+							err,
+							fmt.Sprintf("Can't delete tests for pod %s from database", pod.GetName()),
+						),
+					)
 					return
 				}
 
@@ -375,7 +418,9 @@ func deletePods(clientset *kubernetes.Clientset, db *sql.DB) func(w http.Respons
 				)
 				if err != nil {
 					_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't delete pod %s from database", pod.GetName()))
-					klog.Error(errors.Wrap(err, fmt.Sprintf("Can't delete pod %s from database", pod.GetName())))
+					klog.Error(
+						errors.Wrap(err, fmt.Sprintf("Can't delete pod %s from database", pod.GetName())),
+					)
 					return
 				}
 			}
@@ -385,7 +430,10 @@ func deletePods(clientset *kubernetes.Clientset, db *sql.DB) func(w http.Respons
 	}
 }
 
-func createTest(clientset *kubernetes.Clientset, icingaClientset *icingav1client.Clientset, namespace string) func(w http.ResponseWriter, r *http.Request) {
+func createTest(
+	icingaClientset *icingav1client.Clientset,
+	namespace string,
+) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		klog.Info("Connection from " + r.RemoteAddr + " to " + r.URL.Path)
 
@@ -438,7 +486,11 @@ func createTest(clientset *kubernetes.Clientset, icingaClientset *icingav1client
 			)
 		}
 
-		_, err := icingaClientset.IcingaV1().Tests(namespace).Create(context.Background(), testResource, metav1.CreateOptions{})
+		_, err := icingaClientset.IcingaV1().Tests(namespace).Create(
+			context.Background(),
+			testResource,
+			metav1.CreateOptions{},
+		)
 		if err != nil {
 			_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't create test %s", testResource.GetName()))
 			klog.Error(errors.Wrap(err, fmt.Sprintf("Can't create test %s", testResource.GetName())))
