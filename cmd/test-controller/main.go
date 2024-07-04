@@ -2,9 +2,10 @@ package main
 
 import (
 	"flag"
+	"k8s.io/client-go/util/homedir"
 	"time"
 
-	kubeinformers "k8s.io/client-go/informers"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
@@ -12,7 +13,7 @@ import (
 
 	"github.com/icinga/icinga-kubernetes-testing/pkg/controller"
 	icingav1client "github.com/icinga/icinga-kubernetes-testing/pkg/generated/clientset/versioned"
-	informers "github.com/icinga/icinga-kubernetes-testing/pkg/generated/informers/externalversions"
+	icingainformers "github.com/icinga/icinga-kubernetes-testing/pkg/generated/informers/externalversions"
 )
 
 var (
@@ -24,7 +25,7 @@ func init() {
 	flag.StringVar(
 		&kubeconfig,
 		"kubeconfig",
-		"",
+		homedir.HomeDir()+"/.kube/config",
 		"Path to a kubeconfig. Only required if out-of-cluster.",
 	)
 	flag.StringVar(
@@ -62,8 +63,8 @@ func main() {
 		klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 	}
 
-	kubeInformerFactory := kubeinformers.NewSharedInformerFactory(kubeClient, time.Second*30)
-	icingaInformerFactory := informers.NewSharedInformerFactory(icingaClient, time.Second*30)
+	kubeInformerFactory := informers.NewSharedInformerFactory(kubeClient, time.Second*30)
+	icingaInformerFactory := icingainformers.NewSharedInformerFactory(icingaClient, time.Second*30)
 
 	c := controller.NewController(ctx, kubeClient, icingaClient,
 		kubeInformerFactory.Apps().V1().Deployments(),
@@ -71,7 +72,7 @@ func main() {
 
 	// notice that there is no need to run Start methods in a separate goroutine.
 	// (i.e. go kubeInformerFactory.Start(ctx.done())
-	// Start method is non-blocking and runs all registered informers in a dedicated goroutine.
+	// Start method is non-blocking and runs all registered icingainformers in a dedicated goroutine.
 	kubeInformerFactory.Start(ctx.Done())
 	icingaInformerFactory.Start(ctx.Done())
 
