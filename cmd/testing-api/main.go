@@ -387,6 +387,8 @@ func deletePods(clientset *kubernetes.Clientset, db *sql.DB) func(w http.Respons
 
 func createTest(clientset *kubernetes.Clientset, icingaClientset *icingav1client.Clientset, namespace string) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
+		klog.Info("Connection from " + r.RemoteAddr + " to " + r.URL.Path)
+
 		deploymentName := r.URL.Query().Get("deploymentName")
 		tests := strings.Split(r.URL.Query().Get("tests"), ":")
 		if len(tests) == 1 && tests[0] == "" {
@@ -432,7 +434,8 @@ func createTest(clientset *kubernetes.Clientset, icingaClientset *icingav1client
 					TestKind:     testKind,
 					GoodReplicas: &goodReplicas32,
 					BadReplicas:  &badReplicas32,
-				})
+				},
+			)
 		}
 
 		_, err := icingaClientset.IcingaV1().Tests(namespace).Create(context.Background(), testResource, metav1.CreateOptions{})
@@ -441,6 +444,9 @@ func createTest(clientset *kubernetes.Clientset, icingaClientset *icingav1client
 			klog.Error(errors.Wrap(err, fmt.Sprintf("Can't create test %s", testResource.GetName())))
 			return
 		}
+
+		_, _ = fmt.Fprintln(w, fmt.Sprintf("Created test %s", testResource.GetName()))
+		klog.Info(errors.Wrap(err, fmt.Sprintf("Created test %s", testResource.GetName())))
 
 		//_, err = db.Exec(
 		//	"INSERT INTO pod (uuid, namespace, name) VALUES (?, ?, ?)",
