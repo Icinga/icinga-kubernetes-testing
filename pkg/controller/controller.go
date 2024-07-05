@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"github.com/icinga/icinga-kubernetes-testing/pkg/contracts"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -299,7 +300,7 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 		if errors.IsNotFound(err) {
 			goodDeployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Create(
 				context.TODO(),
-				newDeployment(test, t.GoodReplicas, "-good-"+t.TestKind),
+				newDeployment(test, t.GoodReplicas, "-good-"+t.TestKind, -1),
 				metav1.CreateOptions{},
 			)
 		}
@@ -317,7 +318,7 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 		if errors.IsNotFound(err) {
 			badDeployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Create(
 				context.TODO(),
-				newDeploymentWithConfigMap(test, t.BadReplicas, "-bad-"+t.TestKind, i),
+				newDeployment(test, t.BadReplicas, "-bad-"+t.TestKind, i),
 				metav1.CreateOptions{},
 			)
 		}
@@ -353,7 +354,7 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 
 			goodDeployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Update(
 				context.TODO(),
-				newDeployment(test, t.GoodReplicas, "-good-"+t.TestKind),
+				newDeployment(test, t.GoodReplicas, "-good-"+t.TestKind, -1),
 				metav1.UpdateOptions{},
 			)
 		}
@@ -376,7 +377,7 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 
 			badDeployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Update(
 				context.TODO(),
-				newDeploymentWithConfigMap(test, t.BadReplicas, "-bad-"+t.TestKind, i),
+				newDeployment(test, t.BadReplicas, "-bad-"+t.TestKind, i),
 				metav1.UpdateOptions{},
 			)
 		}
@@ -480,51 +481,21 @@ func (c *TestController) handleObject(obj interface{}) {
 }
 
 // newDeployment creates a new Deployment for a Test resource. It also sets
-// the appropriate OwnerReferences on the resource so handleObject can discover
-// the Test resource that 'owns' it.
-func newDeployment(test *icingav1.Test, replicas *int32, nameSuffix string) *appsv1.Deployment {
-	labels := map[string]string{
-		"app":         "nginx",
-		"testing-api": test.Name,
-	}
-	return &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      test.Spec.DeploymentName + nameSuffix,
-			Namespace: test.Namespace,
-			OwnerReferences: []metav1.OwnerReference{
-				*metav1.NewControllerRef(test, icingav1.SchemeGroupVersion.WithKind("Test")),
-			},
-		},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: replicas,
-			Selector: &metav1.LabelSelector{
-				MatchLabels: labels,
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
-				},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:  "nginx",
-							Image: "nginx:latest",
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
-// newDeploymentWithConfigMap creates a new Deployment for a Test resource. It also sets
 // the appropriate OwnerReferences on the resource so handleObject can discover the Test
 // resource that 'owns' it. Additionally, it mounts a ConfigMap to the container.
-func newDeploymentWithConfigMap(test *icingav1.Test, replicas *int32, nameSuffix string, index int) *appsv1.Deployment {
+func newDeployment(test *icingav1.Test, replicas *int32, nameSuffix string, index int) *appsv1.Deployment {
 	labels := map[string]string{
-		"app":         "nginx",
+		"app":         contracts.TestingLabel,
 		"testing-api": test.Name,
 	}
+
+	var configMapName string
+	if index < 0 {
+		configMapName = "icinga-for-kubernetes-testing-no-tester-config"
+	} else {
+		configMapName = test.Spec.Tests[index].TestConfig
+	}
+
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      test.Spec.DeploymentName + nameSuffix,
@@ -545,8 +516,9 @@ func newDeploymentWithConfigMap(test *icingav1.Test, replicas *int32, nameSuffix
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
 						{
-							Name:  "nginx",
-							Image: "nginx:latest",
+							Name:            "tester",
+							Image:           "ikt-tester",
+							ImagePullPolicy: "Never",
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "test-config-volume",
@@ -561,7 +533,7 @@ func newDeploymentWithConfigMap(test *icingav1.Test, replicas *int32, nameSuffix
 							VolumeSource: corev1.VolumeSource{
 								ConfigMap: &corev1.ConfigMapVolumeSource{
 									LocalObjectReference: corev1.LocalObjectReference{
-										Name: test.Spec.Tests[index].TestConfig,
+										Name: configMapName,
 									},
 								},
 							},

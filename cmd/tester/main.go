@@ -7,11 +7,8 @@ import (
 	"k8s.io/klog/v2"
 	"os"
 	"runtime"
-	"strings"
 	"time"
 )
-
-const prefix = "IK_TEST_"
 
 func startCpuTest(ctx context.Context) error {
 	klog.Info("Starting cpu test")
@@ -59,21 +56,25 @@ func startMemoryTest(ctx context.Context) error {
 }
 
 func main() {
-
 	g, ctx := errgroup.WithContext(context.Background())
 
-	for _, env := range os.Environ() {
-		if strings.HasPrefix(env, prefix) {
-			switch env {
-			case "IK_TEST_CPU":
-				g.Go(func() error {
-					return startCpuTest(ctx)
-				})
-			case "IK_TEST_MEMORY":
-				g.Go(func() error {
-					return startMemoryTest(ctx)
-				})
-			}
+	fileContent, err := os.ReadFile("/etc/ikt/test-config/IK_TEST")
+	if err != nil {
+		klog.Fatal(err)
+	}
+
+	switch string(fileContent) {
+	case "cpu":
+		g.Go(func() error {
+			return startCpuTest(ctx)
+		})
+	case "memory":
+		g.Go(func() error {
+			return startMemoryTest(ctx)
+		})
+	default:
+		for {
+			time.Sleep(1 * time.Minute)
 		}
 	}
 

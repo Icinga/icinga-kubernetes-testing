@@ -29,7 +29,6 @@ import (
 
 const (
 	letterBytes = "abcdefghijklmnopqrstuvwxyz0123456789"
-	prefix      = "IK_TEST_"
 )
 
 func randString(length int) string {
@@ -399,7 +398,7 @@ func createTest(
 					},
 				},
 				Data: map[string]string{
-					"IFK_TEST": testKind,
+					"IK_TEST": testKind,
 				},
 			}
 
