@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
-	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -17,11 +17,8 @@ import (
 	"github.com/icinga/icinga-kubernetes-testing/pkg/contracts"
 	schemav1 "github.com/icinga/icinga-kubernetes/pkg/schema/v1"
 
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ktypes "k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes"
 	kclientcmd "k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
@@ -151,6 +148,7 @@ func main() {
 		klog.Fatal(errors.Wrap(err, "can't get Icinga clientset"))
 	}
 
+	ctx := context.Background()
 	//newTest := &icingav1.Test{
 	//	ObjectMeta: metav1.ObjectMeta{
 	//		Name:      "example-test",
@@ -190,102 +188,15 @@ func main() {
 		klog.Fatal(errors.Wrap(err, "Can't clean space"))
 	}
 
-	http.HandleFunc("/manage/create", createPods(clientset, db, namespace))
 	http.HandleFunc("/manage/wipe", wipePods(clientset, db, namespace))
 	http.HandleFunc("/manage/delete", deletePods(clientset, db))
 
-	http.HandleFunc("/test/create", createTest(icingaClientset, namespace))
+	http.HandleFunc("/test/delete", deleteTests(ctx, icingaClientset))
+	http.HandleFunc("/test/create", createTest(ctx, icingaClientset, namespace))
 
 	klog.Info("Starting server on :8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
 		klog.Fatalf("Could not start server: %s\n", err.Error())
-	}
-}
-
-func createPods(
-	clientset *kubernetes.Clientset,
-	db *sql.DB,
-	namespace string,
-) func(w http.ResponseWriter, r *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		nParam := r.URL.Query().Get("n")
-		if nParam == "" {
-			nParam = "0"
-		}
-
-		n, err := strconv.Atoi(nParam)
-		if err != nil {
-			_, _ = fmt.Fprintln(w, "Can't parse parameter \"n\"")
-			klog.Error(errors.Wrap(err, "Can't parse parameter \"n\""))
-			return
-		}
-
-		requestCpu := r.URL.Query().Get("requestCpu")
-		requestMemory := r.URL.Query().Get("requestMemory")
-		limitCpu := r.URL.Query().Get("limitCpu")
-		limitMemory := r.URL.Query().Get("limitMemory")
-
-		_, _ = fmt.Fprintln(w, requestCpu, requestMemory, limitCpu, limitMemory)
-
-		data, err := os.ReadFile("tester.yml")
-		if err != nil {
-			_, _ = fmt.Fprintln(w, "Can't read tester resource file")
-			klog.Error(errors.Wrap(err, "Can't read tester resource file"))
-			return
-		}
-
-		var pod corev1.Pod
-		err = yaml.Unmarshal(data, &pod)
-		if err != nil {
-			_, _ = fmt.Fprintln(w, "Can't unmarshal tester resource yaml")
-			klog.Error(errors.Wrap(err, "Can't unmarshal tester resource yaml"))
-			return
-		}
-
-		for i := 0; i < n; i++ {
-			currentPod := pod
-			currentPod.ObjectMeta.Name += "-" + randString(10)
-
-			if requestCpu != "" {
-				currentPod.Spec.Containers[0].Resources.Requests["cpu"] = resource.MustParse(requestCpu)
-			}
-			if requestMemory != "" {
-				currentPod.Spec.Containers[0].Resources.Requests["memory"] = resource.MustParse(requestMemory)
-			}
-			if limitCpu != "" {
-				currentPod.Spec.Containers[0].Resources.Limits["cpu"] = resource.MustParse(limitCpu)
-			}
-			if limitMemory != "" {
-				currentPod.Spec.Containers[0].Resources.Limits["memory"] = resource.MustParse(limitMemory)
-			}
-
-			createdPod, err := clientset.CoreV1().Pods(namespace).Create(
-				context.Background(),
-				&currentPod,
-				metav1.CreateOptions{},
-			)
-			if err != nil {
-				_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't create pod %s", currentPod.GetName()))
-				klog.Error(errors.Wrap(err, fmt.Sprintf("Can't create pod %s", currentPod.GetName())))
-				return
-			}
-
-			_, err = db.Exec(
-				"INSERT INTO pod (uuid, namespace, name) VALUES (?, ?, ?)",
-				schemav1.EnsureUUID(createdPod.GetUID()),
-				createdPod.GetNamespace(),
-				createdPod.GetName(),
-			)
-			if err != nil {
-				_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't insert pod %s into database", createdPod.GetName()))
-				klog.Error(
-					errors.Wrap(err, fmt.Sprintf("Can't insert pod %s into database", createdPod.GetName())),
-				)
-				return
-			}
-		}
-
-		_, _ = fmt.Fprintln(w, fmt.Sprintf("%d Pods created", n))
 	}
 }
 
@@ -430,7 +341,67 @@ func deletePods(clientset *kubernetes.Clientset, db *sql.DB) func(w http.Respons
 	}
 }
 
+func deleteTests(
+	ctx context.Context,
+	icingaClientset *icingav1client.Clientset,
+) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		klog.Info("Connection from " + r.RemoteAddr + " to " + r.URL.Path)
+
+		testsParam := r.URL.Query().Get("tests")
+		if testsParam == "" {
+			_, _ = fmt.Fprintln(w, "No tests specified")
+			return
+		}
+
+		testsToDelete := strings.Split(testsParam, ",")
+		testsToDeletePerNs := make(map[string][]string)
+		skipNamespaces := []string{}
+
+		for _, test := range testsToDelete {
+			split := strings.Split(test, "/")
+			namespace, name := split[0], split[1]
+
+			if slices.Contains(skipNamespaces, namespace) {
+				continue
+			}
+
+			testsToDeletePerNs[namespace] = append(testsToDeletePerNs[namespace], name)
+
+			if name == "*" {
+				testsToDeletePerNs[namespace] = []string{"*"}
+				skipNamespaces = append(skipNamespaces, namespace)
+			}
+		}
+
+		for namespace, tests := range testsToDeletePerNs {
+			if tests[0] == "*" {
+				err := icingaClientset.IcingaV1().Tests(namespace).DeleteCollection(
+					ctx,
+					metav1.DeleteOptions{},
+					metav1.ListOptions{},
+				)
+				if err != nil {
+					_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't delete tests in namespace %s", namespace))
+					klog.Error(errors.Wrap(err, fmt.Sprintf("Can't delete tests in namespace %s", namespace)))
+					return
+				}
+			} else {
+				for _, test := range tests {
+					err := icingaClientset.IcingaV1().Tests(namespace).Delete(ctx, test, metav1.DeleteOptions{})
+					if err != nil {
+						_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't delete test %s in namespace %s", test, namespace))
+						klog.Error(errors.Wrap(err, fmt.Sprintf("Can't delete test %s in namespace %s", test, namespace)))
+						return
+					}
+				}
+			}
+		}
+	}
+}
+
 func createTest(
+	ctx context.Context,
 	icingaClientset *icingav1client.Clientset,
 	namespace string,
 ) func(w http.ResponseWriter, r *http.Request) {
@@ -486,11 +457,7 @@ func createTest(
 			)
 		}
 
-		_, err := icingaClientset.IcingaV1().Tests(namespace).Create(
-			context.Background(),
-			testResource,
-			metav1.CreateOptions{},
-		)
+		_, err := icingaClientset.IcingaV1().Tests(namespace).Create(ctx, testResource, metav1.CreateOptions{})
 		if err != nil {
 			_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't create test %s", testResource.GetName()))
 			klog.Error(errors.Wrap(err, fmt.Sprintf("Can't create test %s", testResource.GetName())))
