@@ -288,7 +288,7 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 
 	var availableReplicas int32
 
-	for _, t := range test.Spec.Tests {
+	for i, t := range test.Spec.Tests {
 
 		// Get the goodDeployment with the name specified in Test.spec
 		goodDeployment, err := c.deploymentsLister.Deployments(test.Namespace).Get(
@@ -317,7 +317,7 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 		if errors.IsNotFound(err) {
 			badDeployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Create(
 				context.TODO(),
-				newDeployment(test, t.BadReplicas, "-bad-"+t.TestKind),
+				newDeploymentWithConfigMap(test, t.BadReplicas, "-bad-"+t.TestKind, i),
 				metav1.CreateOptions{},
 			)
 		}
@@ -376,7 +376,7 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 
 			badDeployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Update(
 				context.TODO(),
-				newDeployment(test, t.BadReplicas, "-bad-"+t.TestKind),
+				newDeploymentWithConfigMap(test, t.BadReplicas, "-bad-"+t.TestKind, i),
 				metav1.UpdateOptions{},
 			)
 		}
@@ -509,6 +509,62 @@ func newDeployment(test *icingav1.Test, replicas *int32, nameSuffix string) *app
 						{
 							Name:  "nginx",
 							Image: "nginx:latest",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// newDeploymentWithConfigMap creates a new Deployment for a Test resource. It also sets
+// the appropriate OwnerReferences on the resource so handleObject can discover the Test
+// resource that 'owns' it. Additionally, it mounts a ConfigMap to the container.
+func newDeploymentWithConfigMap(test *icingav1.Test, replicas *int32, nameSuffix string, index int) *appsv1.Deployment {
+	labels := map[string]string{
+		"app":         "nginx",
+		"testing-api": test.Name,
+	}
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      test.Spec.DeploymentName + nameSuffix,
+			Namespace: test.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(test, icingav1.SchemeGroupVersion.WithKind("Test")),
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: replicas,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: labels,
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: labels,
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "nginx",
+							Image: "nginx:latest",
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									Name:      "test-config-volume",
+									MountPath: "/etc/ikt/test-config",
+								},
+							},
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "test-config-volume",
+							VolumeSource: corev1.VolumeSource{
+								ConfigMap: &corev1.ConfigMapVolumeSource{
+									LocalObjectReference: corev1.LocalObjectReference{
+										Name: test.Spec.Tests[index].TestConfig,
+									},
+								},
+							},
 						},
 					},
 				},

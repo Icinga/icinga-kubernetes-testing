@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"fmt"
+	corev1 "k8s.io/api/core/v1"
 	"math/big"
 	"net/http"
 	"slices"
@@ -13,7 +14,6 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/icinga/icinga-go-library/types"
 	"github.com/icinga/icinga-kubernetes-testing/pkg/contracts"
 	schemav1 "github.com/icinga/icinga-kubernetes/pkg/schema/v1"
 
@@ -68,70 +68,46 @@ func getIcingaClientset() (*icingav1client.Clientset, error) {
 	return icingaClientset, nil
 }
 
-func checkTestExists(db *sql.DB, uuid types.UUID, test string) (bool, error) {
-	rows, err := db.Query(
-		"SELECT * FROM pod_test WHERE pod_uuid = ? AND test = ?",
-		uuid,
-		test,
+func wipeTests(ctx context.Context, icingaClientset *icingav1client.Clientset, namespace string) error {
+	err := icingaClientset.IcingaV1().Tests(namespace).DeleteCollection(
+		ctx,
+		metav1.DeleteOptions{},
+		metav1.ListOptions{},
 	)
 	if err != nil {
-		return false, errors.Wrap(err, "Can't execute query")
-	}
-
-	return rows.Next(), nil
-}
-
-func checkPodExists(db *sql.DB, uuid types.UUID) (bool, error) {
-	rows, err := db.Query(
-		"SELECT * FROM pod WHERE uuid = ?",
-		uuid,
-	)
-	if err != nil {
-		return false, errors.Wrap(err, "Can't execute query")
-	}
-
-	return rows.Next(), nil
-}
-
-func registerTest(db *sql.DB, uuid types.UUID, test string) error {
-	_, err := db.Exec(
-		"INSERT INTO pod_test (pod_uuid, test) VALUES (?, ?)",
-		uuid,
-		test,
-	)
-	if err != nil {
-		return errors.Wrap(err, "Can't execute insert query")
+		return errors.Wrap(err, "Can't delete tests")
 	}
 
 	return nil
 }
 
-func unregisterTest(db *sql.DB, uuid types.UUID, test string) error {
-	_, err := db.Exec(
-		"DELETE FROM pod_test WHERE pod_uuid = ? AND test = ?",
-		uuid,
-		test,
+func wipeTesterConfigMaps(ctx context.Context, clientset *kubernetes.Clientset, namespace string) error {
+	err := clientset.CoreV1().ConfigMaps(namespace).DeleteCollection(
+		ctx,
+		metav1.DeleteOptions{},
+		metav1.ListOptions{
+			LabelSelector: contracts.TestingLabel,
+		},
 	)
 	if err != nil {
-		return errors.Wrap(err, "Can't execute delete query")
+		return errors.Wrap(err, fmt.Sprintf("Can't delete config maps"))
 	}
 
 	return nil
 }
 
-func deleteTesterPods(clientset *kubernetes.Clientset, namespace string) error {
-	pods, err := clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{
-		LabelSelector: contracts.TestingLabel,
-	})
-	if err != nil {
-		return errors.Wrap(err, "Can't list pods")
+func cleanSpace(
+	ctx context.Context,
+	icingaClientset *icingav1client.Clientset,
+	clientset *kubernetes.Clientset,
+	namespace string,
+) error {
+	if err := wipeTests(ctx, icingaClientset, namespace); err != nil {
+		return err
 	}
 
-	for _, pod := range pods.Items {
-		err = clientset.CoreV1().Pods(namespace).Delete(context.Background(), pod.Name, metav1.DeleteOptions{})
-		if err != nil {
-			return errors.Wrap(err, fmt.Sprintf("Can't delete pod %s", pod.GetName()))
-		}
+	if err := wipeTesterConfigMaps(ctx, clientset, namespace); err != nil {
+		return err
 	}
 
 	return nil
@@ -149,29 +125,6 @@ func main() {
 	}
 
 	ctx := context.Background()
-	//newTest := &icingav1.Test{
-	//	ObjectMeta: metav1.ObjectMeta{
-	//		Name:      "example-test",
-	//		Namespace: "testing",
-	//	},
-	//	Spec: icingav1.TestSpec{
-	//		CronSpec: "*/1 * * * *",
-	//		Image:    "nginx:latest",
-	//		Replicas: 3,
-	//	},
-	//}
-	//
-	//result, err := icingaClientset.IcingaV1().Tests("testing").Create(
-	//	context.Background(),
-	//	newTest,
-	//	metav1.CreateOptions{},
-	//)
-	//if err != nil {
-	//	klog.Fatal(errors.Wrap(err, "Can't create custom resource test"))
-	//}
-	//klog.Infof("Created custom resource test %s", result.GetName())
-
-	//os.Exit(0)
 
 	db, err := sql.Open(
 		"mysql",
@@ -184,7 +137,7 @@ func main() {
 
 	namespace := "testing"
 
-	if err = deleteTesterPods(clientset, namespace); err != nil {
+	if err = cleanSpace(ctx, icingaClientset, clientset, namespace); err != nil {
 		klog.Fatal(errors.Wrap(err, "Can't clean space"))
 	}
 
@@ -192,7 +145,7 @@ func main() {
 	http.HandleFunc("/manage/delete", deletePods(clientset, db))
 
 	http.HandleFunc("/test/delete", deleteTests(ctx, icingaClientset))
-	http.HandleFunc("/test/create", createTest(ctx, icingaClientset, namespace))
+	http.HandleFunc("/test/create", createTest(ctx, icingaClientset, clientset, namespace))
 
 	klog.Info("Starting server on :8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
@@ -403,6 +356,7 @@ func deleteTests(
 func createTest(
 	ctx context.Context,
 	icingaClientset *icingav1client.Clientset,
+	clientset *kubernetes.Clientset,
 	namespace string,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -415,17 +369,7 @@ func createTest(
 			return
 		}
 
-		//configMap := &corev1.ConfigMap{
-		//	ObjectMeta: metav1.ObjectMeta{
-		//		Name:      "tester-config",
-		//		Namespace: "testing",
-		//	},
-		//}
-		//
-		//for _, test := range strings.Split(tests, ",") {
-		//	configMap.Data[prefix+strings.ToUpper(test)] = "true"
-		//}
-
+		var configMap *corev1.ConfigMap
 		var testResource *icingav1.Test
 
 		testResource = &icingav1.Test{
@@ -441,11 +385,30 @@ func createTest(
 		for _, test := range tests {
 			testKind := strings.Split(test, ",")[0]
 			goodReplicas, _ := strconv.Atoi(strings.Split(test, ",")[1])
-			badReplicas, _ := strconv.Atoi(strings.Split(test, ",")[2])
-
-			// TODO find better solution for this
 			goodReplicas32 := int32(goodReplicas)
+
+			badReplicas, _ := strconv.Atoi(strings.Split(test, ",")[2])
 			badReplicas32 := int32(badReplicas)
+
+			configMap = &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-config-" + randString(10),
+					Namespace: namespace,
+					Labels: map[string]string{
+						contracts.TestingLabel: "true",
+					},
+				},
+				Data: map[string]string{
+					"IFK_TEST": testKind,
+				},
+			}
+
+			_, err := clientset.CoreV1().ConfigMaps(namespace).Create(ctx, configMap, metav1.CreateOptions{})
+			if err != nil {
+				_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't create config map %s", configMap.GetName()))
+				klog.Error(errors.Wrap(err, fmt.Sprintf("Can't create config map %s", configMap.GetName())))
+				return
+			}
 
 			testResource.Spec.Tests = append(
 				testResource.Spec.Tests,
@@ -453,6 +416,7 @@ func createTest(
 					TestKind:     testKind,
 					GoodReplicas: &goodReplicas32,
 					BadReplicas:  &badReplicas32,
+					TestConfig:   configMap.GetName(),
 				},
 			)
 		}

@@ -66,7 +66,7 @@ metadata:
   name: icinga-for-kubernetes-testing-pod-creator
 rules:
   - apiGroups: [ "", "icinga.com" ]
-    resources: [ "pods", "tests" ]
+    resources: [ "pods", "tests", "configmaps" ]
     verbs: [ "create", "delete", "get", "list", "deletecollection" ]
 
 ---

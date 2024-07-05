@@ -10,6 +10,7 @@ type TestTest struct {
 	TestKind     string `json:"testKind"`
 	GoodReplicas *int32 `json:"goodReplicas"`
 	BadReplicas  *int32 `json:"badReplicas"`
+	TestConfig   string `json:"testConfig"`
 }
 
 // TestSpec defines the desired state of Test
