@@ -4,7 +4,8 @@ WORKDIR $GOPATH/src/testing-api/
 COPY go.mod go.sum ./
 RUN go mod download
 
-COPY . .
+COPY cmd ./cmd
+COPY pkg ./pkg
 RUN go build -o /go/bin/testing-api cmd/testing-api/main.go
 
 FROM scratch
@@ -12,7 +13,6 @@ FROM scratch
 WORKDIR /go/bin/
 COPY --from=alpine /tmp /tmp
 COPY --from=builder /go/bin/testing-api ./testing-api
-COPY k8s-resources/tester.yml ./
 EXPOSE 8080
 
 ENTRYPOINT ["./testing-api"]

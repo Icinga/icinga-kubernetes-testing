@@ -7,20 +7,21 @@ metadata:
   labels:
     app: icinga-for-kubernetes-testing-api
 spec:
-    containers:
-      - name: icinga-for-kubernetes-testing-testing-api
-        image: ikt-api
-        imagePullPolicy: Never
-        ports:
-          - containerPort: 8080
-            name: http
-      - name: icinga-for-kubernetes-testing-database
-        image: ikt-database
-        imagePullPolicy: Never
-        ports:
-          - containerPort: 3306
-            name: mysql
-    restartPolicy: Always
+  serviceAccountName: icinga-for-kubernetes-testing-pod-creator-service-account
+  containers:
+    - name: icinga-for-kubernetes-testing-testing-api
+      image: ikt-api
+      imagePullPolicy: Never
+      ports:
+        - containerPort: 8080
+          name: http
+    - name: icinga-for-kubernetes-testing-database
+      image: ikt-database
+      imagePullPolicy: Never
+      ports:
+        - containerPort: 3306
+          name: mysql
+  restartPolicy: Always
 
 ---
 apiVersion: v1
@@ -51,12 +52,12 @@ metadata:
   name: icinga-for-kubernetes-testing-database-service
   namespace: testing
 spec:
-    selector:
-      app: icinga-for-kubernetes-testing-api
-    ports:
-        - protocol: TCP
-          port: 3306
-          targetPort: 3306
+  selector:
+    app: icinga-for-kubernetes-testing-api
+  ports:
+    - protocol: TCP
+      port: 3306
+      targetPort: 3306
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -65,9 +66,9 @@ metadata:
   namespace: testing
   name: icinga-for-kubernetes-testing-pod-creator
 rules:
-  - apiGroups: [ "", "icinga.com" ]
-    resources: [ "pods", "tests" ]
-    verbs: [ "create", "delete", "get", "list", "deletecollection" ]
+  - apiGroups: [ "", "icinga.com", "apps" ]
+    resources: [ "pods", "tests", "deployments", "tests/status", "events" ]
+    verbs: [ "create", "delete", "get", "list", "watch", "update", "patch", "deletecollection" ]
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -77,7 +78,7 @@ metadata:
   namespace: testing
 subjects:
   - kind: ServiceAccount
-    name: default
+    name: icinga-for-kubernetes-testing-pod-creator-service-account
     namespace: testing
 roleRef:
   kind: Role

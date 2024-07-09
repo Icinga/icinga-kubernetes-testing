@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"fmt"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/pkg/errors"
 	"golang.org/x/sync/errgroup"
 	"k8s.io/klog/v2"
-	"os"
+	"net"
 	"runtime"
 	"time"
 )
@@ -56,31 +59,32 @@ func startMemoryTest(ctx context.Context) error {
 }
 
 func main() {
-	g, ctx := errgroup.WithContext(context.Background())
-
-	fileContent, err := os.ReadFile("/etc/ikt/test-config/IK_TEST")
+	port := "8080"
+	listener, err := net.Listen("tcp", ":"+port)
 	if err != nil {
-		klog.Fatal(err)
+		klog.Error(errors.Wrap(err, "Failed to listen on port 8080"))
 	}
+	defer listener.Close()
 
-	switch string(fileContent) {
-	case "cpu":
-		g.Go(func() error {
-			return startCpuTest(ctx)
-		})
-	case "memory":
-		g.Go(func() error {
-			return startMemoryTest(ctx)
-		})
-	default:
-		for {
-			time.Sleep(1 * time.Minute)
+	klog.Info(fmt.Sprintf("Listening on port %s", port))
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			klog.Error(errors.Wrap(err, "Failed to accept connection"))
+			continue
 		}
+		go func() {
+			defer conn.Close()
+			reader := bufio.NewReader(conn)
+			for {
+				message, err := reader.ReadString('\n')
+				if err != nil {
+					klog.Error(errors.Wrap(err, "Failed to read message"))
+					return
+				}
+				klog.Info(fmt.Sprintf("Received YAML: %s", message))
+			}
+		}()
 	}
-
-	if err := g.Wait(); err != nil {
-		klog.Fatal(err)
-	}
-
-	klog.Info("Exiting")
 }

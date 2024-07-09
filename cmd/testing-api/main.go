@@ -19,7 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ktypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
-	kclientcmd "k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 
 	icingav1 "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/v1"
@@ -40,8 +40,8 @@ func randString(length int) string {
 }
 
 func getClientset() (*kubernetes.Clientset, error) {
-	kconfig, err := kclientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		kclientcmd.NewDefaultClientConfigLoadingRules(), &kclientcmd.ConfigOverrides{}).ClientConfig()
+	kconfig, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{}).ClientConfig()
 	if err != nil {
 		return nil, errors.Wrap(err, "Can't configure Kubernetes client")
 	}
@@ -55,8 +55,8 @@ func getClientset() (*kubernetes.Clientset, error) {
 }
 
 func getIcingaClientset() (*icingav1client.Clientset, error) {
-	kconfig, err := kclientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		kclientcmd.NewDefaultClientConfigLoadingRules(), &kclientcmd.ConfigOverrides{}).ClientConfig()
+	kconfig, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{}).ClientConfig()
 	if err != nil {
 		return nil, errors.Wrap(err, "Can't configure Kubernetes client")
 	}
@@ -110,17 +110,15 @@ func main() {
 	}
 	defer db.Close()
 
-	namespace := "testing"
-
-	if err = cleanSpace(ctx, icingaClientset, namespace); err != nil {
+	if err = cleanSpace(ctx, icingaClientset, contracts.TestingNamespace); err != nil {
 		klog.Fatal(errors.Wrap(err, "Can't clean space"))
 	}
 
-	http.HandleFunc("/manage/wipe", wipePods(clientset, db, namespace))
+	http.HandleFunc("/manage/wipe", wipePods(clientset, db, contracts.TestingNamespace))
 	http.HandleFunc("/manage/delete", deletePods(clientset, db))
 
 	http.HandleFunc("/test/delete", deleteTests(ctx, icingaClientset))
-	http.HandleFunc("/test/create", createTest(ctx, icingaClientset, clientset, db, namespace))
+	http.HandleFunc("/test/create", createTest(ctx, icingaClientset, contracts.TestingNamespace))
 
 	klog.Info("Starting server on :8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
@@ -331,8 +329,6 @@ func deleteTests(
 func createTest(
 	ctx context.Context,
 	icingaClientset *icingav1client.Clientset,
-	clientset *kubernetes.Clientset,
-	db *sql.DB,
 	namespace string,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {

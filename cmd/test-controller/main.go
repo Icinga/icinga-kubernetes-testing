@@ -51,32 +51,29 @@ func main() {
 	ctx := signals.SetupSignalHandler()
 	logger := klog.FromContext(ctx)
 
-	cfg, err := clientcmd.BuildConfigFromFlags(masterURL, kubeconfig)
+	clientset, err := getClientset()
 	if err != nil {
-		logger.Error(err, "Error building kubeconfig")
-		klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+		klog.Fatal(errors.Wrap(err, "Can't get Kubernetes clientset"))
 	}
 
-	kubeClient, err := kubernetes.NewForConfig(cfg)
+	icingaClientset, err := getIcingaClientset()
 	if err != nil {
-		logger.Error(err, "Error building kubernetes clientset")
-		klog.FlushAndExit(klog.ExitFlushTimeout, 1)
-	}
-
-	icingaClient, err := icingav1client.NewForConfig(cfg)
-	if err != nil {
-		logger.Error(err, "Error building kubernetes clientset")
-		klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+		klog.Fatal(errors.Wrap(err, "Can't get Icinga clientset"))
 	}
 
 	kubeInformerFactory := informers.NewSharedInformerFactoryWithOptions(
-		kubeClient,
+		clientset,
 		time.Second*30,
+		informers.WithNamespace(contracts.TestingNamespace),
 		informers.WithTweakListOptions(func(options *metav1.ListOptions) {
 			options.LabelSelector = contracts.TestingLabel
 		}),
 	)
-	icingaInformerFactory := icingainformers.NewSharedInformerFactory(icingaClient, time.Second*30)
+	icingaInformerFactory := icingainformers.NewSharedInformerFactoryWithOptions(
+		icingaClientset,
+		time.Second*30,
+		icingainformers.WithNamespace(contracts.TestingNamespace),
+	)
 
 	db, err := sql.Open("mysql", "testing:testing@tcp(172.18.0.2)/testing")
 	if err != nil {
@@ -86,8 +83,8 @@ func main() {
 
 	c := controller.NewController(
 		ctx,
-		kubeClient,
-		icingaClient,
+		clientset,
+		icingaClientset,
 		kubeInformerFactory.Apps().V1().Deployments(),
 		icingaInformerFactory.Icinga().V1().Tests(),
 		db,
@@ -100,4 +97,31 @@ func main() {
 		logger.Error(err, "Error running testing-api")
 		klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 	}
+}
+
+func getClientset() (*kubernetes.Clientset, error) {
+	kconfig, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{}).ClientConfig()
+	if err != nil {
+		return nil, errors.Wrap(err, "Can't configure Kubernetes client")
+	}
+
+	clientset, err := kubernetes.NewForConfig(kconfig)
+	if err != nil {
+		return nil, errors.Wrap(err, "Can't create Kubernetes client")
+	}
+
+	return clientset, nil
+}
+
+func getIcingaClientset() (*icingav1client.Clientset, error) {
+	kconfig, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{}).ClientConfig()
+	if err != nil {
+		return nil, errors.Wrap(err, "Can't configure Kubernetes client")
+	}
+
+	icingaClientset, err := icingav1client.NewForConfig(kconfig)
+
+	return icingaClientset, nil
 }

@@ -17,9 +17,12 @@ limitations under the License.
 package controller
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
+	"slices"
 	"strconv"
 	"time"
 
@@ -29,6 +32,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/rand"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	appsinformers "k8s.io/client-go/informers/apps/v1"
@@ -69,10 +74,10 @@ const (
 
 // TestController is the testing-api implementation for Test resources
 type TestController struct {
-	// kubeclientset is a standard kubernetes clientset
-	kubeclientset kubernetes.Interface
-	// icingaclientset is a clientset for our own API group
-	icingaclientset icingav1client.Interface
+	// clientset is a standard kubernetes clientset
+	clientset kubernetes.Interface
+	// icingaClientset is a clientset for our own API group
+	icingaClientset icingav1client.Interface
 
 	deploymentsLister appslisters.DeploymentLister
 	deploymentsSynced cache.InformerSynced
@@ -113,7 +118,7 @@ func NewController(
 	eventBroadcaster := record.NewBroadcaster(record.WithContext(ctx))
 	eventBroadcaster.StartStructuredLogging(0)
 	eventBroadcaster.StartRecordingToSink(
-		&typedcorev1.EventSinkImpl{Interface: kubeclientset.CoreV1().Events("testing")},
+		&typedcorev1.EventSinkImpl{Interface: kubeclientset.CoreV1().Events(contracts.TestingNamespace)},
 	)
 	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: controllerAgentName})
 	ratelimiter := workqueue.NewMaxOfRateLimiter(
@@ -122,8 +127,8 @@ func NewController(
 	)
 
 	controller := &TestController{
-		kubeclientset:     kubeclientset,
-		icingaclientset:   icingaclientset,
+		clientset:         kubeclientset,
+		icingaClientset:   icingaclientset,
 		deploymentsLister: deploymentInformer.Lister(),
 		deploymentsSynced: deploymentInformer.Informer().HasSynced,
 		testsLister:       testInformer.Lister(),
@@ -166,6 +171,8 @@ func NewController(
 		UpdateFunc: func(old, new interface{}) {
 			newDepl := new.(*appsv1.Deployment)
 			oldDepl := old.(*appsv1.Deployment)
+			controller.handleTests(ctx, newDepl)
+
 			if newDepl.ResourceVersion == oldDepl.ResourceVersion {
 				// Periodic resync will send update events for all known Deployments.
 				// Two different versions of the same Deployment will always have different RVs.
@@ -319,7 +326,7 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 
 		// If the resource doesn't exist, we'll create it
 		if errors.IsNotFound(err) {
-			deployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Create(
+			deployment, err = c.clientset.AppsV1().Deployments(test.Namespace).Create(
 				ctx,
 				newDeployment(test, t.TotalReplicas, t.BadReplicas, t.TestKind),
 				metav1.CreateOptions{},
@@ -351,7 +358,7 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 				"desiredReplicas",
 				*deployment.Spec.Replicas)
 
-			deployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Update(
+			deployment, err = c.clientset.AppsV1().Deployments(test.Namespace).Update(
 				ctx,
 				newDeployment(test, t.TotalReplicas, t.BadReplicas, t.TestKind),
 				metav1.UpdateOptions{},
@@ -392,7 +399,7 @@ func (c *TestController) updateTestStatus(ctx context.Context, test *icingav1.Te
 	// we must use Update instead of UpdateStatus to update the Status block of the Test resource.
 	// UpdateStatus will not allow changes to the Spec of the resource,
 	// which is ideal for ensuring nothing other than resource status has been updated.
-	_, err := c.icingaclientset.IcingaV1().Tests(test.Namespace).UpdateStatus(
+	_, err := c.icingaClientset.IcingaV1().Tests(test.Namespace).UpdateStatus(
 		ctx,
 		testCopy,
 		metav1.UpdateOptions{},
@@ -463,24 +470,98 @@ func (c *TestController) handleObject(ctx context.Context) func(obj interface{})
 	}
 }
 
+func (c *TestController) handleTests(ctx context.Context, deployment *appsv1.Deployment) {
+	logger := klog.FromContext(ctx)
+
+	labelSelector := metav1.FormatLabelSelector(metav1.SetAsLabelSelector(deployment.Spec.Selector.MatchLabels))
+
+	pods, err := c.clientset.CoreV1().Pods(deployment.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+	if err != nil {
+		logger.V(4).Error(err, "Error listing pods")
+		return
+	}
+
+	replicas := int(*deployment.Spec.Replicas)
+	badReplicas, _ := strconv.Atoi(deployment.Labels["badReplicas"])
+	tester := 0
+
+	for _, pod := range pods.Items {
+		if pod.Labels["tester"] == "true" {
+			fmt.Println(pod.Name)
+			tester++
+		}
+	}
+
+	if len(pods.Items) >= replicas && tester != badReplicas {
+		var index int
+		var usedIndexes []int
+
+		for i := 0; i < badReplicas-tester; i++ {
+			if replicas == 1 {
+				index = 0
+			} else {
+				index = rand.IntnRange(0, len(pods.Items)-1)
+				for slices.Contains(usedIndexes, index) || pods.Items[index].Labels["tester"] == "true" {
+					index = rand.IntnRange(0, len(pods.Items)-1)
+				}
+			}
+
+			pod := pods.Items[index]
+			socket := fmt.Sprintf("%s:%s", pod.Status.PodIP, "8080")
+			conn, err := net.Dial("tcp", socket)
+			if err != nil {
+				logger.Error(err, "Error connecting to pod via tcp", "pod", pod.Name, "socket", socket)
+				return
+			}
+			defer conn.Close()
+
+			writer := bufio.NewWriter(conn)
+			_, err = writer.WriteString("test: cpu\n")
+			if err != nil {
+				logger.Error(err, "Error writing to pod", "pod", pod.Name, "socket", socket)
+				return
+			}
+			writer.Flush()
+
+			c.clientset.CoreV1().Pods(deployment.Namespace).Patch(
+				ctx,
+				pod.Name,
+				types.JSONPatchType,
+				[]byte(fmt.Sprintf(`[{"op": "add", "path": "/metadata/labels/tester", "value": "true"}]`)),
+				metav1.PatchOptions{},
+			)
+
+			usedIndexes = append(usedIndexes, index)
+		}
+	}
+
+	//for _, pod := range pods.Items {
+	//	logger.Info("Pod of Deployment", "deployment", deployment.Name, "pod", pod.Name, "pod ip", pod.Status.PodIP)
+	//}
+}
+
 // newDeployment creates a new Deployment for a Test resource. It also sets
 // the appropriate OwnerReferences on the resource so handleObject can discover the Test
 // resource that 'owns' it. Additionally, it mounts a ConfigMap to the container.
 func newDeployment(test *icingav1.Test, replicas *int32, badReplicas *int32, testKind string) *appsv1.Deployment {
+	deploymentName := test.Spec.DeploymentName + "-" + testKind
 	labels := map[string]string{
 		contracts.TestingLabel: "true",
+		"deploymentName":       deploymentName,
 	}
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      test.Spec.DeploymentName + "-" + testKind,
+			Name:      deploymentName,
 			Namespace: test.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(test, icingav1.SchemeGroupVersion.WithKind("Test")),
 			},
 			Labels: map[string]string{
 				contracts.TestingLabel: "true",
-				"bad-replicas":         strconv.Itoa(int(*badReplicas)),
+				"badReplicas":          strconv.Itoa(int(*badReplicas)),
 			},
 		},
 		Spec: appsv1.DeploymentSpec{

@@ -1,0 +1,18 @@
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: icinga-for-kubernetes-testing-controller
+  namespace: testing
+  labels:
+    app: icinga-for-kubernetes-testing-controller
+spec:
+  serviceAccountName: icinga-for-kubernetes-testing-pod-creator-service-account
+  containers:
+    - name: icinga-for-kubernetes-testing-testing-controller
+      image: ikt-controller
+      imagePullPolicy: Never
+      ports:
+        - containerPort: 8080
+          name: http
+  restartPolicy: Always

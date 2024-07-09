@@ -1,0 +1,17 @@
+FROM golang:alpine as builder
+
+WORKDIR $GOPATH/src/testing-controller/
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd ./cmd
+COPY pkg ./pkg
+RUN go build -o /go/bin/testing-controller cmd/test-controller/main.go
+
+FROM scratch
+
+WORKDIR /go/bin/
+COPY --from=alpine /tmp /tmp
+COPY --from=builder /go/bin/testing-controller ./testing-controller
+
+ENTRYPOINT ["./testing-controller"]
