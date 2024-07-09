@@ -18,10 +18,9 @@ package controller
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
 	"fmt"
-	"math/big"
+	"strconv"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -313,7 +312,7 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 
 	var availableReplicas int32
 
-	for i, t := range test.Spec.Tests {
+	for _, t := range test.Spec.Tests {
 
 		// Get the deployment with the name specified in Test.spec
 		deployment, err := c.deploymentsLister.Deployments(test.Namespace).Get(deploymentName + "-" + t.TestKind)
@@ -322,7 +321,7 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 		if errors.IsNotFound(err) {
 			deployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Create(
 				ctx,
-				newDeployment(test, t.TotalReplicas, t.TestKind, i),
+				newDeployment(test, t.TotalReplicas, t.BadReplicas, t.TestKind),
 				metav1.CreateOptions{},
 			)
 		}
@@ -354,7 +353,7 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 
 			deployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Update(
 				ctx,
-				newDeployment(test, t.TotalReplicas, t.TestKind, i),
+				newDeployment(test, t.TotalReplicas, t.BadReplicas, t.TestKind),
 				metav1.UpdateOptions{},
 			)
 		}
@@ -464,34 +463,24 @@ func (c *TestController) handleObject(ctx context.Context) func(obj interface{})
 	}
 }
 
-const (
-	letterBytes = "abcdefghijklmnopqrstuvwxyz0123456789"
-)
-
-func randString(length int) string {
-	var result []byte
-	for i := 0; i < length; i++ {
-		num, _ := rand.Int(rand.Reader, big.NewInt(int64(len(letterBytes))))
-		result = append(result, letterBytes[num.Int64()])
-	}
-	return string(result)
-}
-
 // newDeployment creates a new Deployment for a Test resource. It also sets
 // the appropriate OwnerReferences on the resource so handleObject can discover the Test
 // resource that 'owns' it. Additionally, it mounts a ConfigMap to the container.
-func newDeployment(test *icingav1.Test, replicas *int32, testKind string, index int) *appsv1.Deployment {
+func newDeployment(test *icingav1.Test, replicas *int32, badReplicas *int32, testKind string) *appsv1.Deployment {
 	labels := map[string]string{
 		contracts.TestingLabel: "true",
-		"testing-api":          test.Name,
 	}
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      test.Spec.DeploymentName + "-" + testKind + "-" + randString(10),
+			Name:      test.Spec.DeploymentName + "-" + testKind,
 			Namespace: test.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(test, icingav1.SchemeGroupVersion.WithKind("Test")),
+			},
+			Labels: map[string]string{
+				contracts.TestingLabel: "true",
+				"bad-replicas":         strconv.Itoa(int(*badReplicas)),
 			},
 		},
 		Spec: appsv1.DeploymentSpec{

@@ -69,7 +69,6 @@ func main() {
 		klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 	}
 
-	//kubeInformerFactory := informers.NewSharedInformerFactory(kubeClient, time.Second*30)
 	kubeInformerFactory := informers.NewSharedInformerFactoryWithOptions(
 		kubeClient,
 		time.Second*30,
@@ -94,9 +93,6 @@ func main() {
 		db,
 	)
 
-	// notice that there is no need to run Start methods in a separate goroutine.
-	// (i.e. go kubeInformerFactory.Start(ctx.done())
-	// Start method is non-blocking and runs all registered icingainformers in a dedicated goroutine.
 	kubeInformerFactory.Start(ctx.Done())
 	icingaInformerFactory.Start(ctx.Done())
 
