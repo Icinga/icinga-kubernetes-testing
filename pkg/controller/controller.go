@@ -144,11 +144,12 @@ func NewController(
 		AddFunc: func(obj interface{}) {
 			test := obj.(*icingav1.Test)
 			db.Exec(
-				"INSERT INTO test (uuid, name, namespace, uid) VALUES (?, ?, ?, ?)",
+				"INSERT INTO test (uuid, name, namespace, uid, deployment_name) VALUES (?, ?, ?, ?, ?)",
 				schemav1.EnsureUUID(test.UID),
 				test.Name,
 				test.Namespace,
 				test.UID,
+				test.Spec.DeploymentName,
 			)
 			controller.enqueueTest(obj)
 		},
