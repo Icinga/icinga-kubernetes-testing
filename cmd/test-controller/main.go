@@ -90,7 +90,6 @@ func main() {
 		kubeClient,
 		icingaClient,
 		kubeInformerFactory.Apps().V1().Deployments(),
-		kubeInformerFactory.Core().V1().ConfigMaps(),
 		icingaInformerFactory.Icinga().V1().Tests(),
 		db,
 	)

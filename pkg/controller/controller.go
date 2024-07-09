@@ -21,7 +21,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"fmt"
-	"k8s.io/apimachinery/pkg/types"
 	"math/big"
 	"time"
 
@@ -34,12 +33,10 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	appsinformers "k8s.io/client-go/informers/apps/v1"
-	coreinformers "k8s.io/client-go/informers/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	appslisters "k8s.io/client-go/listers/apps/v1"
-	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
@@ -81,9 +78,6 @@ type TestController struct {
 	deploymentsLister appslisters.DeploymentLister
 	deploymentsSynced cache.InformerSynced
 
-	configMapsLister corelisters.ConfigMapLister
-	configMapsSynced cache.InformerSynced
-
 	testsLister listers.TestLister
 	testsSynced cache.InformerSynced
 
@@ -106,7 +100,6 @@ func NewController(
 	kubeclientset kubernetes.Interface,
 	icingaclientset icingav1client.Interface,
 	deploymentInformer appsinformers.DeploymentInformer,
-	confiMapInformer coreinformers.ConfigMapInformer,
 	testInformer informers.TestInformer,
 	db *sql.DB,
 ) *TestController {
@@ -134,8 +127,6 @@ func NewController(
 		icingaclientset:   icingaclientset,
 		deploymentsLister: deploymentInformer.Lister(),
 		deploymentsSynced: deploymentInformer.Informer().HasSynced,
-		configMapsLister:  confiMapInformer.Lister(),
-		configMapsSynced:  confiMapInformer.Informer().HasSynced,
 		testsLister:       testInformer.Lister(),
 		testsSynced:       testInformer.Informer().HasSynced,
 		workqueue:         workqueue.NewRateLimitingQueue(ratelimiter),
@@ -184,31 +175,6 @@ func NewController(
 			controller.handleObject(ctx)(new)
 		},
 		DeleteFunc: controller.handleObject(ctx),
-	})
-
-	confiMapInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
-			configMap := obj.(*corev1.ConfigMap)
-			klog.Info("ConfigMap added: ", configMap.Labels)
-			_, err := db.Exec(
-				"INSERT INTO test_configmap (uuid, test_uuid, name, namespace) VALUES (?, ?, ?, ?)",
-				schemav1.EnsureUUID(configMap.UID),
-				schemav1.EnsureUUID(types.UID(configMap.Labels["test_uid"])),
-				configMap.Name,
-				configMap.Namespace,
-			)
-			if err != nil {
-				klog.Error(err)
-			}
-		},
-		// TODO Remove? ConfigMap already gets deleted via foreign key constraint when test is deleted
-		DeleteFunc: func(obj interface{}) {
-			configMap := obj.(*corev1.ConfigMap)
-			_, err := db.Exec("DELETE FROM test_configmap WHERE uuid = ?", schemav1.EnsureUUID(configMap.UID))
-			if err != nil {
-				klog.Error(err)
-			}
-		},
 	})
 
 	return controller
@@ -543,24 +509,6 @@ func newDeployment(test *icingav1.Test, replicas *int32, testKind string, index 
 							Name:            "tester",
 							Image:           "ikt-tester",
 							ImagePullPolicy: "Never",
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      "test-config-volume",
-									MountPath: "/etc/ikt/test-config",
-								},
-							},
-						},
-					},
-					Volumes: []corev1.Volume{
-						{
-							Name: "test-config-volume",
-							VolumeSource: corev1.VolumeSource{
-								ConfigMap: &corev1.ConfigMapVolumeSource{
-									LocalObjectReference: corev1.LocalObjectReference{
-										Name: test.Spec.Tests[index].TestConfig,
-									},
-								},
-							},
 						},
 					},
 				},

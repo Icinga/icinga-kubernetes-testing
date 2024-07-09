@@ -44,13 +44,10 @@ spec:
                         type: integer
                         minimum: 0
                         maximum: 10
-                      testConfig:
-                        type: string
                     required:
                       - testKind
                       - totalReplicas
                       - badReplicas
-                      - testConfig
             status:
               type: object
               properties:

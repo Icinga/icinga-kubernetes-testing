@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"fmt"
-	corev1 "k8s.io/api/core/v1"
 	"math/big"
 	"net/http"
 	"slices"
@@ -80,32 +79,12 @@ func wipeTests(ctx context.Context, icingaClientset *icingav1client.Clientset, n
 	return nil
 }
 
-func wipeTesterConfigMaps(ctx context.Context, clientset *kubernetes.Clientset, namespace string) error {
-	err := clientset.CoreV1().ConfigMaps(namespace).DeleteCollection(
-		ctx,
-		metav1.DeleteOptions{},
-		metav1.ListOptions{
-			LabelSelector: contracts.TestingLabel,
-		},
-	)
-	if err != nil {
-		return errors.Wrap(err, fmt.Sprintf("Can't delete config maps"))
-	}
-
-	return nil
-}
-
 func cleanSpace(
 	ctx context.Context,
 	icingaClientset *icingav1client.Clientset,
-	clientset *kubernetes.Clientset,
 	namespace string,
 ) error {
 	if err := wipeTests(ctx, icingaClientset, namespace); err != nil {
-		return err
-	}
-
-	if err := wipeTesterConfigMaps(ctx, clientset, namespace); err != nil {
 		return err
 	}
 
@@ -133,7 +112,7 @@ func main() {
 
 	namespace := "testing"
 
-	if err = cleanSpace(ctx, icingaClientset, clientset, namespace); err != nil {
+	if err = cleanSpace(ctx, icingaClientset, namespace); err != nil {
 		klog.Fatal(errors.Wrap(err, "Can't clean space"))
 	}
 
@@ -366,7 +345,6 @@ func createTest(
 			return
 		}
 
-		var configMap *corev1.ConfigMap
 		var testResource *icingav1.Test
 
 		testResource = &icingav1.Test{
@@ -379,8 +357,6 @@ func createTest(
 			},
 		}
 
-		var configMaps []*corev1.ConfigMap
-
 		for _, test := range tests {
 			testKind := strings.Split(test, ",")[0]
 			totalReplicas, _ := strconv.Atoi(strings.Split(test, ",")[1])
@@ -389,58 +365,21 @@ func createTest(
 			badReplicas, _ := strconv.Atoi(strings.Split(test, ",")[2])
 			badReplicas32 := int32(badReplicas)
 
-			configMap = &corev1.ConfigMap{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-config-" + randString(10),
-					Namespace: namespace,
-					Labels: map[string]string{
-						contracts.TestingLabel: "true",
-					},
-				},
-				Data: map[string]string{
-					"IK_TEST": testKind,
-				},
-			}
-
-			configMaps = append(configMaps, configMap)
-
 			testResource.Spec.Tests = append(
 				testResource.Spec.Tests,
 				icingav1.TestTest{
 					TestKind:      testKind,
 					TotalReplicas: &totalReplicas32,
 					BadReplicas:   &badReplicas32,
-					TestConfig:    configMap.GetName(),
 				},
 			)
 		}
 
-		tst, err := icingaClientset.IcingaV1().Tests(namespace).Create(ctx, testResource, metav1.CreateOptions{})
+		_, err := icingaClientset.IcingaV1().Tests(namespace).Create(ctx, testResource, metav1.CreateOptions{})
 		if err != nil {
 			_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't create test %s", testResource.GetName()))
 			klog.Error(errors.Wrap(err, fmt.Sprintf("Can't create test %s", testResource.GetName())))
 			return
-		}
-
-		for _, cm := range configMaps {
-			cm.Labels["test_uid"] = string(tst.GetUID())
-
-			_, err = clientset.CoreV1().ConfigMaps(namespace).Create(ctx, configMap, metav1.CreateOptions{})
-			if err != nil {
-				_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't create config map %s", configMap.GetName()))
-				klog.Error(errors.Wrap(err, fmt.Sprintf("Can't create config map %s", configMap.GetName())))
-				return
-			}
-			//cm := cm.DeepCopy()
-
-			//_, err = clientset.CoreV1().ConfigMaps(namespace).Update(ctx, cm, metav1.UpdateOptions{})
-			//if err != nil {
-			//	_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't add test_uuid to config map %s", cm.GetName()))
-			//	klog.Error(
-			//		errors.Wrap(err, fmt.Sprintf("Can't add test_uuid to config map %s", cm.GetName())),
-			//	)
-			//	return
-			//}
 		}
 
 		_, _ = fmt.Fprintln(w, fmt.Sprintf("Created test %s", testResource.GetName()))
