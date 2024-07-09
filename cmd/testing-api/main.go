@@ -125,10 +125,7 @@ func main() {
 
 	ctx := context.Background()
 
-	db, err := sql.Open(
-		"mysql",
-		"testing:testing@tcp(icinga-for-kubernetes-testing-database-service:3306)/testing",
-	)
+	db, err := sql.Open("mysql", "testing:testing@tcp(172.18.0.2)/testing")
 	if err != nil {
 		klog.Fatal(errors.Wrap(err, "Can't connect to database"))
 	}
@@ -144,7 +141,7 @@ func main() {
 	http.HandleFunc("/manage/delete", deletePods(clientset, db))
 
 	http.HandleFunc("/test/delete", deleteTests(ctx, icingaClientset))
-	http.HandleFunc("/test/create", createTest(ctx, icingaClientset, clientset, namespace))
+	http.HandleFunc("/test/create", createTest(ctx, icingaClientset, clientset, db, namespace))
 
 	klog.Info("Starting server on :8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
@@ -356,6 +353,7 @@ func createTest(
 	ctx context.Context,
 	icingaClientset *icingav1client.Clientset,
 	clientset *kubernetes.Clientset,
+	db *sql.DB,
 	namespace string,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -381,10 +379,12 @@ func createTest(
 			},
 		}
 
+		var configMaps []*corev1.ConfigMap
+
 		for _, test := range tests {
 			testKind := strings.Split(test, ",")[0]
-			goodReplicas, _ := strconv.Atoi(strings.Split(test, ",")[1])
-			goodReplicas32 := int32(goodReplicas)
+			totalReplicas, _ := strconv.Atoi(strings.Split(test, ",")[1])
+			totalReplicas32 := int32(totalReplicas)
 
 			badReplicas, _ := strconv.Atoi(strings.Split(test, ",")[2])
 			badReplicas32 := int32(badReplicas)
@@ -402,44 +402,48 @@ func createTest(
 				},
 			}
 
-			_, err := clientset.CoreV1().ConfigMaps(namespace).Create(ctx, configMap, metav1.CreateOptions{})
-			if err != nil {
-				_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't create config map %s", configMap.GetName()))
-				klog.Error(errors.Wrap(err, fmt.Sprintf("Can't create config map %s", configMap.GetName())))
-				return
-			}
+			configMaps = append(configMaps, configMap)
 
 			testResource.Spec.Tests = append(
 				testResource.Spec.Tests,
 				icingav1.TestTest{
-					TestKind:     testKind,
-					GoodReplicas: &goodReplicas32,
-					BadReplicas:  &badReplicas32,
-					TestConfig:   configMap.GetName(),
+					TestKind:      testKind,
+					TotalReplicas: &totalReplicas32,
+					BadReplicas:   &badReplicas32,
+					TestConfig:    configMap.GetName(),
 				},
 			)
 		}
 
-		_, err := icingaClientset.IcingaV1().Tests(namespace).Create(ctx, testResource, metav1.CreateOptions{})
+		tst, err := icingaClientset.IcingaV1().Tests(namespace).Create(ctx, testResource, metav1.CreateOptions{})
 		if err != nil {
 			_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't create test %s", testResource.GetName()))
 			klog.Error(errors.Wrap(err, fmt.Sprintf("Can't create test %s", testResource.GetName())))
 			return
 		}
 
-		_, _ = fmt.Fprintln(w, fmt.Sprintf("Created test %s", testResource.GetName()))
-		klog.Info(errors.Wrap(err, fmt.Sprintf("Created test %s", testResource.GetName())))
+		for _, cm := range configMaps {
+			cm.Labels["test_uid"] = string(tst.GetUID())
 
-		//_, err = db.Exec(
-		//	"INSERT INTO pod (uuid, namespace, name) VALUES (?, ?, ?)",
-		//	schemav1.EnsureUUID(createdTest.GetUID()),
-		//	createdTest.GetNamespace(),
-		//	createdTest.GetName(),
-		//)
-		//if err != nil {
-		//	_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't insert test %s into database", createdTest.GetName()))
-		//	klog.Error(errors.Wrap(err, fmt.Sprintf("Can't insert test %s into database", createdTest.GetName())))
-		//	return
-		//}
+			_, err = clientset.CoreV1().ConfigMaps(namespace).Create(ctx, configMap, metav1.CreateOptions{})
+			if err != nil {
+				_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't create config map %s", configMap.GetName()))
+				klog.Error(errors.Wrap(err, fmt.Sprintf("Can't create config map %s", configMap.GetName())))
+				return
+			}
+			//cm := cm.DeepCopy()
+
+			//_, err = clientset.CoreV1().ConfigMaps(namespace).Update(ctx, cm, metav1.UpdateOptions{})
+			//if err != nil {
+			//	_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't add test_uuid to config map %s", cm.GetName()))
+			//	klog.Error(
+			//		errors.Wrap(err, fmt.Sprintf("Can't add test_uuid to config map %s", cm.GetName())),
+			//	)
+			//	return
+			//}
+		}
+
+		_, _ = fmt.Fprintln(w, fmt.Sprintf("Created test %s", testResource.GetName()))
+		klog.Info(fmt.Sprintf("Created test %s", testResource.GetName()))
 	}
 }

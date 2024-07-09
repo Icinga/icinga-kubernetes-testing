@@ -34,7 +34,7 @@ spec:
                     properties:
                       testKind:
                         type: string
-                      goodReplicas:
+                      totalReplicas:
                         format: int32
                         type: integer
                         minimum: 1
@@ -48,7 +48,7 @@ spec:
                         type: string
                     required:
                       - testKind
-                      - goodReplicas
+                      - totalReplicas
                       - badReplicas
                       - testConfig
             status:

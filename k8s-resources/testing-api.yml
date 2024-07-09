@@ -67,7 +67,7 @@ metadata:
 rules:
   - apiGroups: [ "", "icinga.com" ]
     resources: [ "pods", "tests", "configmaps" ]
-    verbs: [ "create", "delete", "get", "list", "deletecollection" ]
+    verbs: [ "create", "delete", "get", "list", "deletecollection", "update" ]
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1

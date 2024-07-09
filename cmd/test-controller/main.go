@@ -1,7 +1,13 @@
 package main
 
 import (
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/icinga/icinga-kubernetes-testing/pkg/contracts"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"database/sql"
 	"flag"
+	"github.com/pkg/errors"
 	"k8s.io/client-go/util/homedir"
 	"time"
 
@@ -63,12 +69,31 @@ func main() {
 		klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 	}
 
-	kubeInformerFactory := informers.NewSharedInformerFactory(kubeClient, time.Second*30)
+	//kubeInformerFactory := informers.NewSharedInformerFactory(kubeClient, time.Second*30)
+	kubeInformerFactory := informers.NewSharedInformerFactoryWithOptions(
+		kubeClient,
+		time.Second*30,
+		informers.WithTweakListOptions(func(options *metav1.ListOptions) {
+			options.LabelSelector = contracts.TestingLabel
+		}),
+	)
 	icingaInformerFactory := icingainformers.NewSharedInformerFactory(icingaClient, time.Second*30)
 
-	c := controller.NewController(ctx, kubeClient, icingaClient,
+	db, err := sql.Open("mysql", "testing:testing@tcp(172.18.0.2)/testing")
+	if err != nil {
+		klog.Fatal(errors.Wrap(err, "Can't connect to database"))
+	}
+	defer db.Close()
+
+	c := controller.NewController(
+		ctx,
+		kubeClient,
+		icingaClient,
 		kubeInformerFactory.Apps().V1().Deployments(),
-		icingaInformerFactory.Icinga().V1().Tests())
+		kubeInformerFactory.Core().V1().ConfigMaps(),
+		icingaInformerFactory.Icinga().V1().Tests(),
+		db,
+	)
 
 	// notice that there is no need to run Start methods in a separate goroutine.
 	// (i.e. go kubeInformerFactory.Start(ctx.done())

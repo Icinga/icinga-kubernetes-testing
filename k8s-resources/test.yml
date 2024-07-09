@@ -8,8 +8,8 @@ spec:
     deploymentName: icinga-for-kubernetes-testing-tester
     tests:
       - testKind: cpu
-        goodReplicas: 4
+        totalReplicas: 4
         badReplicas: 2
       - testKind: memory
-        goodReplicas: 2
+        totalReplicas: 2
         badReplicas: 1

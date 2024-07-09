@@ -7,10 +7,10 @@ import (
 
 // TestTest defines a test to be run
 type TestTest struct {
-	TestKind     string `json:"testKind"`
-	GoodReplicas *int32 `json:"goodReplicas"`
-	BadReplicas  *int32 `json:"badReplicas"`
-	TestConfig   string `json:"testConfig"`
+	TestKind      string `json:"testKind"`
+	TotalReplicas *int32 `json:"totalReplicas"`
+	BadReplicas   *int32 `json:"badReplicas"`
+	TestConfig    string `json:"testConfig"`
 }
 
 // TestSpec defines the desired state of Test

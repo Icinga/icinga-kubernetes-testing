@@ -18,8 +18,11 @@ package controller
 
 import (
 	"context"
+	"crypto/rand"
+	"database/sql"
 	"fmt"
-	"github.com/icinga/icinga-kubernetes-testing/pkg/contracts"
+	"k8s.io/apimachinery/pkg/types"
+	"math/big"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -31,20 +34,24 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	appsinformers "k8s.io/client-go/informers/apps/v1"
+	coreinformers "k8s.io/client-go/informers/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	appslisters "k8s.io/client-go/listers/apps/v1"
+	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 
 	icingav1 "github.com/icinga/icinga-kubernetes-testing/pkg/apis/icinga/v1"
+	"github.com/icinga/icinga-kubernetes-testing/pkg/contracts"
 	icingav1client "github.com/icinga/icinga-kubernetes-testing/pkg/generated/clientset/versioned"
 	icingascheme "github.com/icinga/icinga-kubernetes-testing/pkg/generated/clientset/versioned/scheme"
 	informers "github.com/icinga/icinga-kubernetes-testing/pkg/generated/informers/externalversions/icinga/v1"
 	listers "github.com/icinga/icinga-kubernetes-testing/pkg/generated/listers/icinga/v1"
+	schemav1 "github.com/icinga/icinga-kubernetes/pkg/schema/v1"
 )
 
 const controllerAgentName = "icinga-testing-api"
@@ -73,8 +80,12 @@ type TestController struct {
 
 	deploymentsLister appslisters.DeploymentLister
 	deploymentsSynced cache.InformerSynced
-	testsLister       listers.TestLister
-	testsSynced       cache.InformerSynced
+
+	configMapsLister corelisters.ConfigMapLister
+	configMapsSynced cache.InformerSynced
+
+	testsLister listers.TestLister
+	testsSynced cache.InformerSynced
 
 	// workqueue is a rate limited work queue. This is used to queue work to be
 	// processed instead of performing it as soon as a change happens. This
@@ -85,6 +96,8 @@ type TestController struct {
 	// recorder is an event recorder for recording Event resources to the
 	// Kubernetes API.
 	recorder record.EventRecorder
+
+	db *sql.DB
 }
 
 // NewController returns a new sample testing-api
@@ -93,7 +106,10 @@ func NewController(
 	kubeclientset kubernetes.Interface,
 	icingaclientset icingav1client.Interface,
 	deploymentInformer appsinformers.DeploymentInformer,
-	testInformer informers.TestInformer) *TestController {
+	confiMapInformer coreinformers.ConfigMapInformer,
+	testInformer informers.TestInformer,
+	db *sql.DB,
+) *TestController {
 	logger := klog.FromContext(ctx)
 
 	// Create event broadcaster
@@ -118,18 +134,35 @@ func NewController(
 		icingaclientset:   icingaclientset,
 		deploymentsLister: deploymentInformer.Lister(),
 		deploymentsSynced: deploymentInformer.Informer().HasSynced,
+		configMapsLister:  confiMapInformer.Lister(),
+		configMapsSynced:  confiMapInformer.Informer().HasSynced,
 		testsLister:       testInformer.Lister(),
 		testsSynced:       testInformer.Informer().HasSynced,
 		workqueue:         workqueue.NewRateLimitingQueue(ratelimiter),
 		recorder:          recorder,
+		db:                db,
 	}
 
 	logger.Info("Setting up event handlers")
 	// Set up an event handler for when Test resources change
 	testInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: controller.enqueueTest,
+		AddFunc: func(obj interface{}) {
+			test := obj.(*icingav1.Test)
+			db.Exec(
+				"INSERT INTO test (uuid, name, namespace, uid) VALUES (?, ?, ?, ?)",
+				schemav1.EnsureUUID(test.UID),
+				test.Name,
+				test.Namespace,
+				test.UID,
+			)
+			controller.enqueueTest(obj)
+		},
 		UpdateFunc: func(old, new interface{}) {
 			controller.enqueueTest(new)
+		},
+		DeleteFunc: func(obj interface{}) {
+			test := obj.(*icingav1.Test)
+			db.Exec("DELETE FROM test WHERE uuid = ?", schemav1.EnsureUUID(test.UID))
 		},
 	})
 	// Set up an event handler for when Deployment resources change. This
@@ -139,7 +172,7 @@ func NewController(
 	// handling Deployment resources. More info on this pattern:
 	// https://github.com/kubernetes/community/blob/8cafef897a22026d42f5e5bb3f104febe7e29830/contributors/devel/controllers.md
 	deploymentInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: controller.handleObject,
+		AddFunc: controller.handleObject(ctx),
 		UpdateFunc: func(old, new interface{}) {
 			newDepl := new.(*appsv1.Deployment)
 			oldDepl := old.(*appsv1.Deployment)
@@ -148,9 +181,34 @@ func NewController(
 				// Two different versions of the same Deployment will always have different RVs.
 				return
 			}
-			controller.handleObject(new)
+			controller.handleObject(ctx)(new)
 		},
-		DeleteFunc: controller.handleObject,
+		DeleteFunc: controller.handleObject(ctx),
+	})
+
+	confiMapInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			configMap := obj.(*corev1.ConfigMap)
+			klog.Info("ConfigMap added: ", configMap.Labels)
+			_, err := db.Exec(
+				"INSERT INTO test_configmap (uuid, test_uuid, name, namespace) VALUES (?, ?, ?, ?)",
+				schemav1.EnsureUUID(configMap.UID),
+				schemav1.EnsureUUID(types.UID(configMap.Labels["test_uid"])),
+				configMap.Name,
+				configMap.Namespace,
+			)
+			if err != nil {
+				klog.Error(err)
+			}
+		},
+		// TODO Remove? ConfigMap already gets deleted via foreign key constraint when test is deleted
+		DeleteFunc: func(obj interface{}) {
+			configMap := obj.(*corev1.ConfigMap)
+			_, err := db.Exec("DELETE FROM test_configmap WHERE uuid = ?", schemav1.EnsureUUID(configMap.UID))
+			if err != nil {
+				klog.Error(err)
+			}
+		},
 	})
 
 	return controller
@@ -291,16 +349,14 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 
 	for i, t := range test.Spec.Tests {
 
-		// Get the goodDeployment with the name specified in Test.spec
-		goodDeployment, err := c.deploymentsLister.Deployments(test.Namespace).Get(
-			deploymentName + "-good-" + t.TestKind,
-		)
+		// Get the deployment with the name specified in Test.spec
+		deployment, err := c.deploymentsLister.Deployments(test.Namespace).Get(deploymentName + "-" + t.TestKind)
 
 		// If the resource doesn't exist, we'll create it
 		if errors.IsNotFound(err) {
-			goodDeployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Create(
-				context.TODO(),
-				newDeployment(test, t.GoodReplicas, "-good-"+t.TestKind, -1),
+			deployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Create(
+				ctx,
+				newDeployment(test, t.TotalReplicas, t.TestKind, i),
 				metav1.CreateOptions{},
 			)
 		}
@@ -311,32 +367,10 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 			return err
 		}
 
-		badDeployment, err := c.deploymentsLister.Deployments(test.Namespace).Get(
-			deploymentName + "-bad-" + t.TestKind,
-		)
-
-		if errors.IsNotFound(err) {
-			badDeployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Create(
-				context.TODO(),
-				newDeployment(test, t.BadReplicas, "-bad-"+t.TestKind, i),
-				metav1.CreateOptions{},
-			)
-		}
-
-		if err != nil {
-			return err
-		}
-
 		// If the Deployment is not controlled by this Test resource, we should log
 		// a warning to the event recorder and return error msg.
-		if !metav1.IsControlledBy(goodDeployment, test) {
-			msg := fmt.Sprintf(MessageResourceExists, goodDeployment.Name)
-			c.recorder.Event(test, corev1.EventTypeWarning, ErrResourceExists, msg)
-			return fmt.Errorf("%s", msg)
-		}
-
-		if !metav1.IsControlledBy(badDeployment, test) {
-			msg := fmt.Sprintf(MessageResourceExists, badDeployment.Name)
+		if !metav1.IsControlledBy(deployment, test) {
+			msg := fmt.Sprintf(MessageResourceExists, deployment.Name)
 			c.recorder.Event(test, corev1.EventTypeWarning, ErrResourceExists, msg)
 			return fmt.Errorf("%s", msg)
 		}
@@ -344,17 +378,17 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 		// If this number of the replicas on the Test resource is specified, and the
 		// number does not equal the current desired replicas on the Deployment, we
 		// should update the Deployment resource.
-		if t.GoodReplicas != nil && *t.GoodReplicas != *goodDeployment.Spec.Replicas {
+		if t.TotalReplicas != nil && *t.TotalReplicas != *deployment.Spec.Replicas {
 			logger.V(4).Info(
-				"Update goodDeployment resource",
+				"Update deployment resource",
 				"currentReplicas",
-				*t.GoodReplicas,
+				*t.TotalReplicas,
 				"desiredReplicas",
-				*goodDeployment.Spec.Replicas)
+				*deployment.Spec.Replicas)
 
-			goodDeployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Update(
-				context.TODO(),
-				newDeployment(test, t.GoodReplicas, "-good-"+t.TestKind, -1),
+			deployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Update(
+				ctx,
+				newDeployment(test, t.TotalReplicas, t.TestKind, i),
 				metav1.UpdateOptions{},
 			)
 		}
@@ -366,42 +400,24 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 			return err
 		}
 
-		if t.BadReplicas != nil && *t.BadReplicas != *goodDeployment.Spec.Replicas {
-			logger.V(4).Info(
-				"Update goodDeployment resource",
-				"currentReplicas",
-				*t.GoodReplicas,
-				"desiredReplicas",
-				*goodDeployment.Spec.Replicas,
-			)
-
-			badDeployment, err = c.kubeclientset.AppsV1().Deployments(test.Namespace).Update(
-				context.TODO(),
-				newDeployment(test, t.BadReplicas, "-bad-"+t.TestKind, i),
-				metav1.UpdateOptions{},
-			)
-		}
-
-		if err != nil {
-			return err
-		}
-
-		availableReplicas += goodDeployment.Status.AvailableReplicas
-		availableReplicas += badDeployment.Status.AvailableReplicas
+		availableReplicas += deployment.Status.AvailableReplicas
 	}
 
 	// Finally, we update the status block of the Test resource to reflect the
 	// current state of the world
-	err = c.updateTestStatus(test, availableReplicas)
+	err = c.updateTestStatus(ctx, test, availableReplicas)
 	if err != nil {
 		return err
 	}
 
 	c.recorder.Event(test, corev1.EventTypeNormal, SuccessSynced, MessageResourceSynced)
+
+	// Insert the test into a database
+
 	return nil
 }
 
-func (c *TestController) updateTestStatus(test *icingav1.Test, availableReplicas int32) error {
+func (c *TestController) updateTestStatus(ctx context.Context, test *icingav1.Test, availableReplicas int32) error {
 	// NEVER modify objects from the store. It's a read-only, local cache.
 	// You can use DeepCopy() to make a deep copy of original object and modify this copy
 	// Or create a copy manually for better performance
@@ -412,7 +428,7 @@ func (c *TestController) updateTestStatus(test *icingav1.Test, availableReplicas
 	// UpdateStatus will not allow changes to the Spec of the resource,
 	// which is ideal for ensuring nothing other than resource status has been updated.
 	_, err := c.icingaclientset.IcingaV1().Tests(test.Namespace).UpdateStatus(
-		context.TODO(),
+		ctx,
 		testCopy,
 		metav1.UpdateOptions{},
 	)
@@ -438,67 +454,75 @@ func (c *TestController) enqueueTest(obj interface{}) {
 // objects metadata.ownerReferences field for an appropriate OwnerReference.
 // It then enqueues that Test resource to be processed. If the object does not
 // have an appropriate OwnerReference, it will simply be skipped.
-func (c *TestController) handleObject(obj interface{}) {
-	var object metav1.Object
-	var ok bool
-	logger := klog.FromContext(context.Background())
-	if object, ok = obj.(metav1.Object); !ok {
-		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
-		if !ok {
-			utilruntime.HandleError(fmt.Errorf("error decoding object, invalid type"))
-			return
+func (c *TestController) handleObject(ctx context.Context) func(obj interface{}) {
+	return func(obj interface{}) {
+		var object metav1.Object
+		var ok bool
+		logger := klog.FromContext(ctx)
+		if object, ok = obj.(metav1.Object); !ok {
+			tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
+			if !ok {
+				utilruntime.HandleError(fmt.Errorf("error decoding object, invalid type"))
+				return
+			}
+			object, ok = tombstone.Obj.(metav1.Object)
+			if !ok {
+				utilruntime.HandleError(fmt.Errorf("error decoding object tombstone, invalid type"))
+				return
+			}
+			logger.V(4).Info("Recovered deleted object", "resourceName", object.GetName())
 		}
-		object, ok = tombstone.Obj.(metav1.Object)
-		if !ok {
-			utilruntime.HandleError(fmt.Errorf("error decoding object tombstone, invalid type"))
-			return
-		}
-		logger.V(4).Info("Recovered deleted object", "resourceName", object.GetName())
-	}
-	logger.V(4).Info("Processing object", "object", klog.KObj(object))
-	if ownerRef := metav1.GetControllerOf(object); ownerRef != nil {
-		// If this object is not owned by a Test, we should not do anything more
-		// with it.
-		if ownerRef.Kind != "Test" {
-			return
-		}
+		logger.V(4).Info("Processing object", "object", klog.KObj(object))
+		if ownerRef := metav1.GetControllerOf(object); ownerRef != nil {
+			// If this object is not owned by a Test, we should not do anything more
+			// with it.
+			if ownerRef.Kind != "Test" {
+				return
+			}
 
-		test, err := c.testsLister.Tests(object.GetNamespace()).Get(ownerRef.Name)
-		if err != nil {
-			logger.V(4).Info(
-				"Ignore orphaned object",
-				"object",
-				klog.KObj(object),
-				"test",
-				ownerRef.Name,
-			)
+			test, err := c.testsLister.Tests(object.GetNamespace()).Get(ownerRef.Name)
+			if err != nil {
+				logger.V(4).Info(
+					"Ignore orphaned object",
+					"object",
+					klog.KObj(object),
+					"test",
+					ownerRef.Name,
+				)
+				return
+			}
+
+			c.enqueueTest(test)
 			return
 		}
-
-		c.enqueueTest(test)
-		return
 	}
+}
+
+const (
+	letterBytes = "abcdefghijklmnopqrstuvwxyz0123456789"
+)
+
+func randString(length int) string {
+	var result []byte
+	for i := 0; i < length; i++ {
+		num, _ := rand.Int(rand.Reader, big.NewInt(int64(len(letterBytes))))
+		result = append(result, letterBytes[num.Int64()])
+	}
+	return string(result)
 }
 
 // newDeployment creates a new Deployment for a Test resource. It also sets
 // the appropriate OwnerReferences on the resource so handleObject can discover the Test
 // resource that 'owns' it. Additionally, it mounts a ConfigMap to the container.
-func newDeployment(test *icingav1.Test, replicas *int32, nameSuffix string, index int) *appsv1.Deployment {
+func newDeployment(test *icingav1.Test, replicas *int32, testKind string, index int) *appsv1.Deployment {
 	labels := map[string]string{
-		"app":         contracts.TestingLabel,
-		"testing-api": test.Name,
-	}
-
-	var configMapName string
-	if index < 0 {
-		configMapName = "icinga-for-kubernetes-testing-no-tester-config"
-	} else {
-		configMapName = test.Spec.Tests[index].TestConfig
+		contracts.TestingLabel: "true",
+		"testing-api":          test.Name,
 	}
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      test.Spec.DeploymentName + nameSuffix,
+			Name:      test.Spec.DeploymentName + "-" + testKind + "-" + randString(10),
 			Namespace: test.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(test, icingav1.SchemeGroupVersion.WithKind("Test")),
@@ -533,7 +557,7 @@ func newDeployment(test *icingav1.Test, replicas *int32, nameSuffix string, inde
 							VolumeSource: corev1.VolumeSource{
 								ConfigMap: &corev1.ConfigMapVolumeSource{
 									LocalObjectReference: corev1.LocalObjectReference{
-										Name: configMapName,
+										Name: test.Spec.Tests[index].TestConfig,
 									},
 								},
 							},
