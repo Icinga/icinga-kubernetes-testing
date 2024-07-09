@@ -14,11 +14,7 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/icinga/icinga-kubernetes-testing/pkg/contracts"
-	schemav1 "github.com/icinga/icinga-kubernetes/pkg/schema/v1"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	ktypes "k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 
@@ -37,21 +33,6 @@ func randString(length int) string {
 		result = append(result, letterBytes[num.Int64()])
 	}
 	return string(result)
-}
-
-func getClientset() (*kubernetes.Clientset, error) {
-	kconfig, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{}).ClientConfig()
-	if err != nil {
-		return nil, errors.Wrap(err, "Can't configure Kubernetes client")
-	}
-
-	clientset, err := kubernetes.NewForConfig(kconfig)
-	if err != nil {
-		return nil, errors.Wrap(err, "Can't create Kubernetes client")
-	}
-
-	return clientset, nil
 }
 
 func getIcingaClientset() (*icingav1client.Clientset, error) {
@@ -92,11 +73,6 @@ func cleanSpace(
 }
 
 func main() {
-	clientset, err := getClientset()
-	if err != nil {
-		klog.Fatal(errors.Wrap(err, "can't get Kubernetes clientset"))
-	}
-
 	icingaClientset, err := getIcingaClientset()
 	if err != nil {
 		klog.Fatal(errors.Wrap(err, "can't get Icinga clientset"))
@@ -114,156 +90,12 @@ func main() {
 		klog.Fatal(errors.Wrap(err, "Can't clean space"))
 	}
 
-	http.HandleFunc("/manage/wipe", wipePods(clientset, db, contracts.TestingNamespace))
-	http.HandleFunc("/manage/delete", deletePods(clientset, db))
-
 	http.HandleFunc("/test/delete", deleteTests(ctx, icingaClientset))
 	http.HandleFunc("/test/create", createTest(ctx, icingaClientset, contracts.TestingNamespace))
 
 	klog.Info("Starting server on :8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
 		klog.Fatalf("Could not start server: %s\n", err.Error())
-	}
-}
-
-func wipePods(
-	clientset *kubernetes.Clientset,
-	db *sql.DB,
-	namespace string,
-) func(w http.ResponseWriter, r *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		pods, err := clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{
-			LabelSelector: contracts.TestingLabel,
-		})
-		if err != nil {
-			_, _ = fmt.Fprintln(w, "Can't list pods")
-			klog.Error(errors.Wrap(err, "Can't list pods"))
-			return
-		}
-
-		counter := 0
-
-		for _, pod := range pods.Items {
-			currentPod, err := clientset.CoreV1().Pods(namespace).Get(
-				context.Background(),
-				pod.Name,
-				metav1.GetOptions{},
-			)
-			err = clientset.CoreV1().Pods(namespace).Delete(context.Background(), pod.Name, metav1.DeleteOptions{})
-			if err != nil {
-				_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't delete pod %s", pod.GetName()))
-				klog.Error(errors.Wrap(err, fmt.Sprintf("Can't delete pod %s", pod.GetName())))
-				return
-			} else {
-				counter++
-
-				_, err = db.Exec(
-					"DELETE FROM pod_test WHERE pod_uuid = ?",
-					schemav1.EnsureUUID(currentPod.GetUID()),
-				)
-				if err != nil {
-					_, _ = fmt.Fprintln(
-						w,
-						fmt.Sprintf("Can't delete tests for pod %s from database", pod.GetName()),
-					)
-					klog.Error(
-						errors.Wrap(
-							err,
-							fmt.Sprintf("Can't delete tests for pod %s from database", pod.GetName()),
-						),
-					)
-					return
-				}
-
-				_, err = db.Exec(
-					"DELETE FROM pod WHERE uuid = ?",
-					schemav1.EnsureUUID(currentPod.GetUID()),
-				)
-				if err != nil {
-					_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't delete pod %s from database", pod.GetName()))
-					klog.Error(
-						errors.Wrap(err, fmt.Sprintf("Can't delete pod %s from database", pod.GetName())),
-					)
-					return
-				}
-			}
-		}
-
-		_, _ = fmt.Fprintln(w, fmt.Sprintf("%d Pods wiped", counter))
-	}
-}
-
-func deletePods(clientset *kubernetes.Clientset, db *sql.DB) func(w http.ResponseWriter, r *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		uuids := strings.Split(r.URL.Query().Get("uuids"), ",")
-		counter := 0
-
-		for _, uuid := range uuids {
-			podUuid := schemav1.EnsureUUID(ktypes.UID(uuid))
-			res, err := db.Query(
-				"SELECT namespace, name FROM pod WHERE uuid = ?",
-				podUuid,
-			)
-			if err != nil {
-				_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't query pod with uuid %s", uuid))
-				klog.Error(errors.Wrap(err, fmt.Sprintf("Can't query pod with uuid %s", uuid)))
-				return
-			}
-
-			if !res.Next() {
-				_, _ = fmt.Fprintln(w, fmt.Sprintf("Pod with uuid %s does not exist", uuid))
-				klog.Error(errors.New(fmt.Sprintf("Pod with uuid %s does not exist", uuid)))
-				return
-			}
-
-			var namespace, name string
-			err = res.Scan(&namespace, &name)
-
-			if strings.Contains(name, "icinga-for-testing-testing-api") {
-				continue
-			}
-			pod, err := clientset.CoreV1().Pods(namespace).Get(context.Background(), name, metav1.GetOptions{})
-			err = clientset.CoreV1().Pods(namespace).Delete(context.Background(), name, metav1.DeleteOptions{})
-			if err != nil {
-				_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't delete pod %s", name))
-				klog.Error(errors.Wrap(err, fmt.Sprintf("Can't delete pod %s", name)))
-				return
-			} else {
-				counter++
-
-				_, err = db.Exec(
-					"DELETE FROM pod_test WHERE pod_uuid = ?",
-					podUuid,
-				)
-				if err != nil {
-					_, _ = fmt.Fprintln(
-						w,
-						fmt.Sprintf("Can't delete tests for pod %s from database", pod.GetName()),
-					)
-					klog.Error(
-						errors.Wrap(
-							err,
-							fmt.Sprintf("Can't delete tests for pod %s from database", pod.GetName()),
-						),
-					)
-					return
-				}
-
-				_, err = db.Exec(
-					"DELETE FROM pod WHERE uuid = ?",
-					podUuid,
-				)
-				if err != nil {
-					_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't delete pod %s from database", pod.GetName()))
-					klog.Error(
-						errors.Wrap(err, fmt.Sprintf("Can't delete pod %s from database", pod.GetName())),
-					)
-					return
-				}
-			}
-		}
-
-		_, _ = fmt.Fprintln(w, fmt.Sprintf("%d Pods deleted", counter))
 	}
 }
 
