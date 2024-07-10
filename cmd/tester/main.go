@@ -7,9 +7,9 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/pkg/errors"
 	"golang.org/x/sync/errgroup"
+	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/klog/v2"
 	"net"
-	"runtime"
 	"time"
 )
 
@@ -18,8 +18,9 @@ func startCpuTest(ctx context.Context) error {
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	numCPU := runtime.NumCPU()
-	for i := 0; i < numCPU; i++ {
+	//numCpu := runtime.NumCPU()
+	numCpu := 1
+	for i := 0; i < numCpu; i++ {
 		g.Go(func() error {
 			for {
 				//_ = math.Sin(math.Pi)
@@ -58,8 +59,32 @@ func startMemoryTest(ctx context.Context) error {
 	}
 }
 
+type testConfig struct {
+	Test string `json:"test"`
+}
+
 func main() {
-	port := "8080"
+	config := getConfigFromPort("8080")
+
+	klog.Info("Config: ", config)
+
+	ctx := context.Background()
+
+	switch config.Test {
+	case "cpu":
+		err := startCpuTest(ctx)
+		if err != nil {
+			klog.Error(errors.Wrap(err, "Failed to start CPU test"))
+		}
+	case "memory":
+		err := startMemoryTest(ctx)
+		if err != nil {
+			klog.Error(errors.Wrap(err, "Failed to start memory test"))
+		}
+	}
+}
+
+func getConfigFromPort(port string) testConfig {
 	listener, err := net.Listen("tcp", ":"+port)
 	if err != nil {
 		klog.Error(errors.Wrap(err, "Failed to listen on port 8080"))
@@ -74,17 +99,29 @@ func main() {
 			klog.Error(errors.Wrap(err, "Failed to accept connection"))
 			continue
 		}
-		go func() {
-			defer conn.Close()
-			reader := bufio.NewReader(conn)
-			for {
-				message, err := reader.ReadString('\n')
-				if err != nil {
-					klog.Error(errors.Wrap(err, "Failed to read message"))
-					return
-				}
-				klog.Info(fmt.Sprintf("Received YAML: %s", message))
-			}
-		}()
+		defer conn.Close()
+
+		reader := bufio.NewReader(conn)
+		//for {
+		message, err := reader.ReadString('\n')
+		if err != nil {
+			klog.Error(errors.Wrap(err, "Failed to read message"))
+			continue
+		}
+
+		klog.Info(fmt.Sprintf("Received YAML: %s", message))
+
+		var config testConfig
+		err = yaml.Unmarshal([]byte(message), &config)
+		if err != nil {
+			klog.Error(errors.Wrap(err, "Failed to unmarshal YAML"))
+			continue
+		}
+
+		if config.Test != "" {
+			klog.Info("Field 'Test' found in YAML. Stopping listener.")
+			return config
+		}
+		//}
 	}
 }

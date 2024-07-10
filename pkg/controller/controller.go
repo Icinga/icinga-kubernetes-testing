@@ -543,7 +543,7 @@ func (c *TestController) handleTests(ctx context.Context, deployment *appsv1.Dep
 			defer conn.Close()
 
 			writer := bufio.NewWriter(conn)
-			_, err = writer.WriteString("test: cpu\n")
+			_, err = writer.WriteString(fmt.Sprintf("test: %s\n", deployment.Labels["testKind"]))
 			if err != nil {
 				logger.Error(err, "Error writing to pod", "pod", pod.Name, "socket", socket)
 				return
@@ -595,6 +595,7 @@ func newDeployment(test *icingav1.Test, replicas *int32, badReplicas *int32, tes
 			Labels: map[string]string{
 				contracts.TestingLabel: "true",
 				"badReplicas":          strconv.Itoa(int(*badReplicas)),
+				"testKind":             testKind,
 			},
 		},
 		Spec: appsv1.DeploymentSpec{
