@@ -82,7 +82,7 @@ func main() {
 
 	ctx := context.Background()
 
-	db, err := sql.Open("mysql", "testing:testing@tcp(172.18.0.2)/testing")
+	db, err := sql.Open("mysql", "testing:testing@tcp(192.168.49.2:30003)/testing")
 	if err != nil {
 		klog.Fatal(errors.Wrap(err, "Can't connect to database"))
 	}
@@ -93,7 +93,7 @@ func main() {
 	}
 
 	http.HandleFunc("/test/delete", deleteTests(ctx, icingaClientset))
-	http.HandleFunc("/test/create", createTest(ctx, icingaClientset, contracts.TestingNamespace))
+	http.HandleFunc("/test/create", createTest(ctx, db, icingaClientset, contracts.TestingNamespace))
 
 	klog.Info("Starting server on :8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
@@ -162,6 +162,7 @@ func deleteTests(
 
 func createTest(
 	ctx context.Context,
+	db *sql.DB,
 	icingaClientset *icingav1client.Clientset,
 	namespace string,
 ) func(w http.ResponseWriter, r *http.Request) {
@@ -173,6 +174,25 @@ func createTest(
 		if len(tests) == 1 && tests[0] == "" {
 			_, _ = fmt.Fprintln(w, "No tests specified")
 			return
+		}
+
+		deploymentNames, err := db.Query("SELECT deployment_name FROM test")
+		if err != nil {
+			_, _ = fmt.Fprintln(w, "Can't get deployment names from database")
+			klog.Error(errors.Wrap(err, "Can't get deployment names from database"))
+			return
+		}
+		defer deploymentNames.Close()
+
+		for deploymentNames.Next() {
+			var name string
+			_ = deploymentNames.Scan(&name)
+
+			if name == deploymentName {
+				_, _ = fmt.Fprintln(w, fmt.Sprintf("Deployment %s is already in use", deploymentName))
+				klog.Error(errors.New(fmt.Sprintf("Deployment %s is already in use", deploymentName)))
+				return
+			}
 		}
 
 		var testResource *icingav1.Test
@@ -195,6 +215,27 @@ func createTest(
 			badReplicas, _ := strconv.Atoi(strings.Split(test, ",")[2])
 			badReplicas32 := int32(badReplicas)
 
+			if totalReplicas32 < badReplicas32 {
+				_, _ = fmt.Fprintln(
+					w,
+					fmt.Sprintf(
+						"Bad replicas count %d is greater than total replicas count %d",
+						badReplicas32,
+						totalReplicas32,
+					),
+				)
+				klog.Error(
+					errors.New(
+						fmt.Sprintf(
+							"Bad replicas count %d is greater than total replicas count %d",
+							badReplicas32,
+							totalReplicas32,
+						),
+					),
+				)
+				return
+			}
+
 			testResource.Spec.Tests = append(
 				testResource.Spec.Tests,
 				icingav1.TestTest{
@@ -205,7 +246,7 @@ func createTest(
 			)
 		}
 
-		_, err := icingaClientset.IcingaV1().Tests(namespace).Create(ctx, testResource, metav1.CreateOptions{})
+		_, err = icingaClientset.IcingaV1().Tests(namespace).Create(ctx, testResource, metav1.CreateOptions{})
 		if err != nil {
 			_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't create test %s", testResource.GetName()))
 			klog.Error(errors.Wrap(err, fmt.Sprintf("Can't create test %s", testResource.GetName())))
