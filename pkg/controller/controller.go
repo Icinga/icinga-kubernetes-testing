@@ -144,12 +144,13 @@ func NewController(
 		AddFunc: func(obj interface{}) {
 			test := obj.(*icingav1.Test)
 			_, err := db.Exec(
-				"INSERT INTO test (uuid, name, namespace, uid, deployment_name) VALUES (?, ?, ?, ?, ?)",
+				"INSERT INTO test (uuid, name, namespace, uid, deployment_name, created) VALUES (?, ?, ?, ?, ?, ?)",
 				schemav1.EnsureUUID(test.UID),
 				test.Name,
 				test.Namespace,
 				test.UID,
 				test.Spec.DeploymentName,
+				test.ObjectMeta.CreationTimestamp.UnixMilli(),
 			)
 			if err != nil {
 				logger.V(4).Error(err, "Error inserting test into database")
