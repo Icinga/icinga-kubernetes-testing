@@ -113,7 +113,7 @@ func NewController(
 	// Add sample-testing-api types to the default Kubernetes Scheme so Events can be
 	// logged for sample-testing-api types.
 	utilruntime.Must(icingascheme.AddToScheme(scheme.Scheme))
-	logger.V(4).Info("Creating event broadcaster")
+	logger.Info("Creating event broadcaster")
 
 	eventBroadcaster := record.NewBroadcaster(record.WithContext(ctx))
 	eventBroadcaster.StartStructuredLogging(0)
@@ -153,7 +153,7 @@ func NewController(
 				test.ObjectMeta.CreationTimestamp.UnixMilli(),
 			)
 			if err != nil {
-				logger.V(4).Error(err, "Error inserting test into database")
+				logger.Error(err, "Error inserting test into database")
 			}
 			controller.enqueueTest(obj)
 		},
@@ -164,7 +164,7 @@ func NewController(
 			test := obj.(*icingav1.Test)
 			_, err := db.Exec("DELETE FROM test WHERE uuid = ?", schemav1.EnsureUUID(test.UID))
 			if err != nil {
-				logger.V(4).Error(err, "Error deleting test from database")
+				logger.Error(err, "Error deleting test from database")
 			}
 		},
 	})
@@ -179,7 +179,11 @@ func NewController(
 		UpdateFunc: func(old, new interface{}) {
 			newDepl := new.(*appsv1.Deployment)
 			oldDepl := old.(*appsv1.Deployment)
-			controller.handleTests(ctx, newDepl)
+
+			klog.Info("Could handle tests")
+			if *newDepl.Spec.Replicas == newDepl.Status.AvailableReplicas {
+				controller.handleTests(ctx, newDepl)
+			}
 
 			if newDepl.ResourceVersion == oldDepl.ResourceVersion {
 				// Periodic resync will send update events for all known Deployments.
@@ -294,8 +298,7 @@ func (c *TestController) processNextWorkItem(ctx context.Context) bool {
 // converge the two. It then updates the Status block of the Test resource
 // with the current status of the resource.
 func (c *TestController) syncHandler(ctx context.Context, key string) error {
-	// Convert the namespace/name string into a distinct namespace and name
-	logger := klog.LoggerWithValues(klog.FromContext(ctx), "resourceName", key)
+	logger := klog.FromContext(ctx)
 
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
@@ -359,7 +362,7 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 		// number does not equal the current desired replicas on the Deployment, we
 		// should update the Deployment resource.
 		if t.TotalReplicas != nil && *t.TotalReplicas != *deployment.Spec.Replicas {
-			logger.V(4).Info(
+			logger.Info(
 				"Update deployment resource",
 				"currentReplicas",
 				*t.TotalReplicas,
@@ -435,10 +438,11 @@ func (c *TestController) enqueueTest(obj interface{}) {
 // It then enqueues that Test resource to be processed. If the object does not
 // have an appropriate OwnerReference, it will simply be skipped.
 func (c *TestController) handleObject(ctx context.Context) func(obj interface{}) {
+	logger := klog.FromContext(ctx)
+
 	return func(obj interface{}) {
 		var object metav1.Object
 		var ok bool
-		logger := klog.FromContext(ctx)
 		if object, ok = obj.(metav1.Object); !ok {
 			tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
 			if !ok {
@@ -450,9 +454,9 @@ func (c *TestController) handleObject(ctx context.Context) func(obj interface{})
 				utilruntime.HandleError(fmt.Errorf("error decoding object tombstone, invalid type"))
 				return
 			}
-			logger.V(4).Info("Recovered deleted object", "resourceName", object.GetName())
+			logger.Info("Recovered deleted object", "resourceName", object.GetName())
 		}
-		logger.V(4).Info("Processing object", "object", klog.KObj(object))
+		logger.Info("Processing object", "object", klog.KObj(object))
 		if ownerRef := metav1.GetControllerOf(object); ownerRef != nil {
 			// If this object is not owned by a Test, we should not do anything more
 			// with it.
@@ -462,7 +466,7 @@ func (c *TestController) handleObject(ctx context.Context) func(obj interface{})
 
 			test, err := c.testsLister.Tests(object.GetNamespace()).Get(ownerRef.Name)
 			if err != nil {
-				logger.V(4).Info(
+				logger.Info(
 					"Ignore orphaned object",
 					"object",
 					klog.KObj(object),
@@ -481,13 +485,15 @@ func (c *TestController) handleObject(ctx context.Context) func(obj interface{})
 func (c *TestController) handleTests(ctx context.Context, deployment *appsv1.Deployment) {
 	logger := klog.FromContext(ctx)
 
+	logger.Info("Handling tests", "deployment", deployment.Name)
+
 	labelSelector := metav1.FormatLabelSelector(metav1.SetAsLabelSelector(deployment.Spec.Selector.MatchLabels))
 
 	pods, err := c.clientset.CoreV1().Pods(deployment.Namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector,
 	})
 	if err != nil {
-		logger.V(4).Error(err, "Error listing pods")
+		logger.Error(err, "Error listing pods")
 		return
 	}
 
@@ -497,12 +503,12 @@ func (c *TestController) handleTests(ctx context.Context, deployment *appsv1.Dep
 
 	for _, pod := range pods.Items {
 		if pod.Labels["tester"] == "true" {
-			fmt.Println(pod.Name)
+			klog.Info(fmt.Sprintf("Already tester: %s", pod.Name))
 			tester++
 		}
 	}
 
-	if len(pods.Items) >= replicas && tester != badReplicas {
+	if tester != badReplicas {
 		var index int
 		var usedIndexes []int
 
@@ -510,17 +516,28 @@ func (c *TestController) handleTests(ctx context.Context, deployment *appsv1.Dep
 			if replicas == 1 {
 				index = 0
 			} else {
-				index = rand.IntnRange(0, len(pods.Items)-1)
+				index = rand.IntnRange(0, len(pods.Items))
 				for slices.Contains(usedIndexes, index) || pods.Items[index].Labels["tester"] == "true" {
-					index = rand.IntnRange(0, len(pods.Items)-1)
+					index = rand.IntnRange(0, len(pods.Items))
 				}
 			}
 
 			pod := pods.Items[index]
 			socket := fmt.Sprintf("%s:%s", pod.Status.PodIP, "8080")
-			conn, err := net.Dial("tcp", socket)
+			var conn net.Conn
+
+			for j := 0; j < 3; j++ {
+				conn, err = net.Dial("tcp", socket)
+				if err == nil {
+					break
+				}
+
+				logger.Error(err, "Error connecting to pod via tcp", "pod", pod.Name, "socket", socket, "attempt", j+1)
+				time.Sleep(5 * time.Second)
+			}
+
 			if err != nil {
-				logger.Error(err, "Error connecting to pod via tcp", "pod", pod.Name, "socket", socket)
+				logger.Error(err, "Failed to connect to pod after 3 attempts", "pod", pod.Name, "socket", socket)
 				return
 			}
 			defer conn.Close()
@@ -531,15 +548,23 @@ func (c *TestController) handleTests(ctx context.Context, deployment *appsv1.Dep
 				logger.Error(err, "Error writing to pod", "pod", pod.Name, "socket", socket)
 				return
 			}
-			writer.Flush()
+			err = writer.Flush()
+			if err != nil {
+				logger.Error(err, "Error flushing writer", "pod", pod.Name, "socket", socket)
+				return
+			}
 
-			c.clientset.CoreV1().Pods(deployment.Namespace).Patch(
+			_, err = c.clientset.CoreV1().Pods(deployment.Namespace).Patch(
 				ctx,
 				pod.Name,
 				types.JSONPatchType,
 				[]byte(fmt.Sprintf(`[{"op": "add", "path": "/metadata/labels/tester", "value": "true"}]`)),
 				metav1.PatchOptions{},
 			)
+			if err != nil {
+				logger.Error(err, "Error patching pod", "pod", pod.Name)
+				return
+			}
 
 			usedIndexes = append(usedIndexes, index)
 		}
