@@ -75,7 +75,7 @@ func main() {
 		icingainformers.WithNamespace(contracts.TestingNamespace),
 	)
 
-	db, err := sql.Open("mysql", "testing:testing@tcp(172.18.0.2)/testing")
+	db, err := sql.Open("mysql", "testing:testing@tcp(192.168.49.2:30003)/testing")
 	if err != nil {
 		klog.Fatal(errors.Wrap(err, "Can't connect to database"))
 	}

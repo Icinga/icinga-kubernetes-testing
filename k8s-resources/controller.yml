@@ -9,10 +9,47 @@ metadata:
 spec:
   serviceAccountName: icinga-for-kubernetes-testing-pod-creator-service-account
   containers:
-    - name: icinga-for-kubernetes-testing-testing-controller
+    - name: controller
       image: ikt-controller
       imagePullPolicy: Never
       ports:
         - containerPort: 8080
           name: http
+    - name: database
+      image: ikt-database
+      imagePullPolicy: Never
+      ports:
+        - containerPort: 3306
+          name: mysql
   restartPolicy: Always
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: icinga-for-kubernetes-testing-controller-nodeport
+  namespace: testing
+spec:
+  type: NodePort
+  selector:
+    app: icinga-for-kubernetes-testing-controller
+  ports:
+    - protocol: TCP
+      port: 3306
+      targetPort: 3306
+      nodePort: 30003
+      name: mysql
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: icinga-for-kubernetes-testing-database-service
+  namespace: testing
+spec:
+  selector:
+    app: icinga-for-kubernetes-testing-controller
+  ports:
+    - protocol: TCP
+      port: 3306
+      targetPort: 3306

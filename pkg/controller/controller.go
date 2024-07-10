@@ -143,7 +143,7 @@ func NewController(
 	testInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			test := obj.(*icingav1.Test)
-			db.Exec(
+			_, err := db.Exec(
 				"INSERT INTO test (uuid, name, namespace, uid, deployment_name) VALUES (?, ?, ?, ?, ?)",
 				schemav1.EnsureUUID(test.UID),
 				test.Name,
@@ -151,6 +151,9 @@ func NewController(
 				test.UID,
 				test.Spec.DeploymentName,
 			)
+			if err != nil {
+				logger.V(4).Error(err, "Error inserting test into database")
+			}
 			controller.enqueueTest(obj)
 		},
 		UpdateFunc: func(old, new interface{}) {
@@ -158,7 +161,10 @@ func NewController(
 		},
 		DeleteFunc: func(obj interface{}) {
 			test := obj.(*icingav1.Test)
-			db.Exec("DELETE FROM test WHERE uuid = ?", schemav1.EnsureUUID(test.UID))
+			_, err := db.Exec("DELETE FROM test WHERE uuid = ?", schemav1.EnsureUUID(test.UID))
+			if err != nil {
+				logger.V(4).Error(err, "Error deleting test from database")
+			}
 		},
 	})
 	// Set up an event handler for when Deployment resources change. This

@@ -15,12 +15,6 @@ spec:
       ports:
         - containerPort: 8080
           name: http
-    - name: icinga-for-kubernetes-testing-database
-      image: ikt-database
-      imagePullPolicy: Never
-      ports:
-        - containerPort: 3306
-          name: mysql
   restartPolicy: Always
 
 ---
@@ -39,25 +33,6 @@ spec:
       targetPort: 8080
       nodePort: 30002
       name: http
-    - protocol: TCP
-      port: 3306
-      targetPort: 3306
-      nodePort: 30003
-      name: mysql
-
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: icinga-for-kubernetes-testing-database-service
-  namespace: testing
-spec:
-  selector:
-    app: icinga-for-kubernetes-testing-api
-  ports:
-    - protocol: TCP
-      port: 3306
-      targetPort: 3306
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
