@@ -146,6 +146,9 @@ func deleteTests(
 					klog.Error(errors.Wrap(err, fmt.Sprintf("Can't delete tests in namespace %s", namespace)))
 					return
 				}
+
+				_, _ = fmt.Fprintln(w, fmt.Sprintf("Deleted all tests int %s namespapce", namespace))
+				klog.Info(fmt.Sprintf("Deleted all tests in %s namespace", namespace))
 			} else {
 				for _, test := range tests {
 					err := icingaClientset.IcingaV1().Tests(namespace).Delete(ctx, test, metav1.DeleteOptions{})
@@ -154,6 +157,9 @@ func deleteTests(
 						klog.Error(errors.Wrap(err, fmt.Sprintf("Can't delete test %s in namespace %s", test, namespace)))
 						return
 					}
+
+					_, _ = fmt.Fprintln(w, fmt.Sprintf("Deleted test %s", test))
+					klog.Info(fmt.Sprintf("Deleted test %s", test))
 				}
 			}
 		}
