@@ -180,7 +180,6 @@ func NewController(
 			newDepl := new.(*appsv1.Deployment)
 			oldDepl := old.(*appsv1.Deployment)
 
-			klog.Info("Could handle tests")
 			if *newDepl.Spec.Replicas == newDepl.Status.AvailableReplicas {
 				controller.handleTests(ctx, newDepl)
 			}
@@ -207,8 +206,10 @@ func (c *TestController) Run(ctx context.Context, workers int) error {
 	defer c.workqueue.ShutDown()
 	logger := klog.FromContext(ctx)
 
+	c.warmup(ctx)
+
 	// Start the informer factories to begin populating the informer caches
-	logger.Info("Starting Test testing-api")
+	logger.Info("Starting Test controller")
 
 	// Wait for the caches to be synced before starting workers
 	logger.Info("Waiting for informer caches to sync")
@@ -228,6 +229,40 @@ func (c *TestController) Run(ctx context.Context, workers int) error {
 	logger.Info("Shutting down workers")
 
 	return nil
+}
+
+func (c *TestController) warmup(ctx context.Context) {
+	logger := klog.FromContext(ctx)
+
+	logger.Info("Warming up")
+
+	tests, err := c.icingaClientset.IcingaV1().Tests(contracts.TestingNamespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		logger.Error(err, "Error listing tests while warming up")
+		return
+	}
+
+	for c.db.Ping() != nil {
+		logger.Info("Database not ready, waiting 5 seconds")
+		time.Sleep(5 * time.Second)
+	}
+
+	logger.Info("Database ready")
+
+	for _, test := range tests.Items {
+		_, err = c.db.Exec(
+			"INSERT INTO test (uuid, name, namespace, uid, deployment_name, created) VALUES (?, ?, ?, ?, ?, ?)",
+			schemav1.EnsureUUID(test.UID),
+			test.Name,
+			test.Namespace,
+			test.UID,
+			test.Spec.DeploymentName,
+			test.ObjectMeta.CreationTimestamp.UnixMilli(),
+		)
+		if err != nil {
+			logger.Error(err, "Error inserting test into database while warming up")
+		}
+	}
 }
 
 // runWorker is a long-running function that will continually call the
