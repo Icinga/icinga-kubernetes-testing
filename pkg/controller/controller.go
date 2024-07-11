@@ -248,9 +248,11 @@ func (c *TestController) warmup(ctx context.Context) {
 		return
 	}
 
+	timeout := 5
+
 	for c.db.Ping() != nil {
-		logger.Info("Database not ready, waiting 5 seconds")
-		time.Sleep(5 * time.Second)
+		logger.Info(fmt.Sprintf("Database not ready, waiting %d seconds", timeout))
+		time.Sleep(time.Duration(timeout) * time.Second)
 	}
 
 	logger.Info("Database ready")
