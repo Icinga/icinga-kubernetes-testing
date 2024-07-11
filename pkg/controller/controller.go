@@ -79,10 +79,14 @@ type TestController struct {
 	// icingaClientset is a clientset for our own API group
 	icingaClientset icingav1client.Interface
 
+	// deploymentsLister lists Deployments from the shared informer's store
 	deploymentsLister appslisters.DeploymentLister
+	// deploymentsSynced returns true if the Deployment store has been synced at least once
 	deploymentsSynced cache.InformerSynced
 
+	// testsLister lists Test from the shared informer's store
 	testsLister listers.TestLister
+	// testsSynced returns true if the Test store has been synced at least once
 	testsSynced cache.InformerSynced
 
 	// workqueue is a rate limited work queue. This is used to queue work to be
@@ -231,6 +235,8 @@ func (c *TestController) Run(ctx context.Context, workers int) error {
 	return nil
 }
 
+// warmup is a function that will be called before the controller starts
+// processing events. It will list all tests and insert them into the database.
 func (c *TestController) warmup(ctx context.Context) {
 	logger := klog.FromContext(ctx)
 
@@ -435,6 +441,7 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 	return nil
 }
 
+// updateTestStatus takes a Test resource and updates its Status.AvailableReplicas
 func (c *TestController) updateTestStatus(ctx context.Context, test *icingav1.Test, availableReplicas int32) error {
 	// NEVER modify objects from the store. It's a read-only, local cache.
 	// You can use DeepCopy() to make a deep copy of original object and modify this copy
@@ -517,6 +524,9 @@ func (c *TestController) handleObject(ctx context.Context) func(obj interface{})
 	}
 }
 
+// handleTests will handle the tests for a deployment by listing the pods and
+// patching the pods to have a label 'tester=true' in the number of the badReplicas.
+// For that, it will connect to the pod via a tcp connection and send a message to the pod.
 func (c *TestController) handleTests(ctx context.Context, deployment *appsv1.Deployment) {
 	logger := klog.FromContext(ctx)
 
