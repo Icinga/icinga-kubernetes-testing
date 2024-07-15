@@ -102,7 +102,6 @@ func getConfigFromPort(port string) testConfig {
 		defer conn.Close()
 
 		reader := bufio.NewReader(conn)
-		//for {
 		message, err := reader.ReadString('\n')
 		if err != nil {
 			klog.Error(errors.Wrap(err, "Failed to read message"))
@@ -122,6 +121,5 @@ func getConfigFromPort(port string) testConfig {
 			klog.Info("Field 'Test' found in YAML. Stopping listener.")
 			return config
 		}
-		//}
 	}
 }

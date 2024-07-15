@@ -2,21 +2,25 @@ package main
 
 import (
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/icinga/icinga-kubernetes-testing/pkg/contracts"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"context"
 	"database/sql"
 	"flag"
-	"github.com/pkg/errors"
-	"k8s.io/client-go/util/homedir"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
+	"github.com/pkg/errors"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/homedir"
 	"k8s.io/klog/v2"
-	"k8s.io/sample-controller/pkg/signals"
 
+	"github.com/icinga/icinga-kubernetes-testing/pkg/contracts"
 	"github.com/icinga/icinga-kubernetes-testing/pkg/controller"
 	icingav1client "github.com/icinga/icinga-kubernetes-testing/pkg/generated/clientset/versioned"
 	icingainformers "github.com/icinga/icinga-kubernetes-testing/pkg/generated/informers/externalversions"
@@ -48,7 +52,17 @@ func main() {
 	flag.Parse()
 
 	// set up signals so we handle the shutdown signal gracefully
-	ctx := signals.SetupSignalHandler()
+	var shutdownSignals = []os.Signal{os.Interrupt, syscall.SIGTERM}
+
+	signals := make(chan os.Signal, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	signal.Notify(signals, shutdownSignals...)
+	go func() {
+		<-signals
+		cancel()
+		<-signals
+		os.Exit(1) // second signal. Exit directly.
+	}()
 	logger := klog.FromContext(ctx)
 
 	clientset, err := getClientset()

@@ -504,6 +504,8 @@ func (c *TestController) handleObject(ctx context.Context) func(obj interface{})
 		if ownerRef := metav1.GetControllerOf(object); ownerRef != nil {
 			// If this object is not owned by a Test, we should not do anything more
 			// with it.
+			fmt.Println(ownerRef)
+
 			if ownerRef.Kind != "Test" {
 				return
 			}
