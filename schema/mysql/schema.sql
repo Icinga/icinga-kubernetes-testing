@@ -8,3 +8,19 @@ CREATE TABLE test (
 
     PRIMARY KEY (uuid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+CREATE TABLE template (
+    id varchar(32) NOT NULL,
+    name varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+    created bigint unsigned NOT NULL,
+    modified bigint unsigned,
+
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+CREATE TABLE template_test (
+    template_id varchar(32) NOT NULL,
+    test_kind varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+    total_replicas int unsigned NOT NULL,
+    bad_replicas int unsigned NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
