@@ -12,7 +12,7 @@ spec:
       imagePullPolicy: Never
       ports:
         - containerPort: 8080
-          name: http
+          name: tcp
 #      readinessProbe:
 #        httpGet:
 #          path: /readiness
@@ -32,12 +32,12 @@ spec:
         limits:
           cpu: 200m
           memory: 200Mi
-      env:
-      - name: POD_NAME
-        valueFrom:
-          fieldRef:
-            fieldPath: metadata.name
-      - name: POD_NAMESPACE
-        valueFrom:
-          fieldRef:
-            fieldPath: metadata.namespace
+#      env:
+#      - name: POD_NAME
+#        valueFrom:
+#          fieldRef:
+#            fieldPath: metadata.name
+#      - name: POD_NAMESPACE
+#        valueFrom:
+#          fieldRef:
+#            fieldPath: metadata.namespace

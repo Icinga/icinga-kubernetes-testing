@@ -1,0 +1,18 @@
+FROM golang:alpine as builder
+
+WORKDIR $GOPATH/src/testing-api/
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd/testing-api ./cmd/testing-api
+COPY pkg ./pkg
+RUN go build -o /go/bin/testing-api cmd/testing-api/main.go
+
+FROM scratch
+
+WORKDIR /go/bin/
+COPY --from=alpine /tmp /tmp
+COPY --from=builder /go/bin/testing-api ./testing-api
+EXPOSE 8080
+
+ENTRYPOINT ["./testing-api"]

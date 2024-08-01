@@ -1,18 +1,17 @@
 FROM golang:alpine as builder
 
-WORKDIR $GOPATH/src/controller/
+WORKDIR $GOPATH/src/testing-controller/
 COPY go.mod go.sum ./
 RUN go mod download
 
-COPY . .
-RUN go build -o /go/bin/controller cmd/controller/main.go
+COPY cmd/test-controller ./cmd/test-controller
+COPY pkg ./pkg
+RUN go build -o /go/bin/testing-controller cmd/test-controller/main.go
 
 FROM scratch
 
 WORKDIR /go/bin/
 COPY --from=alpine /tmp /tmp
-COPY --from=builder /go/bin/controller ./controller
-COPY k8s-resources/tester.yml ./
-EXPOSE 8080
+COPY --from=builder /go/bin/testing-controller ./testing-controller
 
-ENTRYPOINT ["./controller"]
+ENTRYPOINT ["./testing-controller"]
