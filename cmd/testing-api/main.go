@@ -2,6 +2,7 @@ package main
 
 import (
 	_ "github.com/go-sql-driver/mysql"
+	"k8s.io/client-go/kubernetes"
 
 	"context"
 	"crypto/rand"
@@ -28,6 +29,8 @@ const (
 	letterBytes = "abcdefghijklmnopqrstuvwxyz0123456789"
 )
 
+// TODO remove const and use variable in the function instead
+
 func randString(length int) string {
 	var result []byte
 	for i := 0; i < length; i++ {
@@ -35,6 +38,21 @@ func randString(length int) string {
 		result = append(result, letterBytes[num.Int64()])
 	}
 	return string(result)
+}
+
+func getClientset() (*kubernetes.Clientset, error) {
+	kconfig, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{}).ClientConfig()
+	if err != nil {
+		return nil, errors.Wrap(err, "Can't configure Kubernetes client")
+	}
+
+	clientset, err := kubernetes.NewForConfig(kconfig)
+	if err != nil {
+		return nil, errors.Wrap(err, "Can't create Kubernetes client")
+	}
+
+	return clientset, nil
 }
 
 func getIcingaClientset() (*icingav1client.Clientset, error) {
@@ -71,6 +89,8 @@ func cleanSpace(
 		return err
 	}
 
+	// Add more resources to clean here if needed
+
 	return nil
 }
 
@@ -80,20 +100,26 @@ func main() {
 		klog.Fatal(errors.Wrap(err, "can't get Icinga clientset"))
 	}
 
+	clientset, err := getClientset()
+	if err != nil {
+		klog.Fatal(errors.Wrap(err, "can't get Kubernetes clientset"))
+	}
+
 	ctx := context.Background()
 
 	db, err := sql.Open("mysql", "testing:testing@tcp(192.168.49.2:30003)/testing")
 	if err != nil {
 		klog.Fatal(errors.Wrap(err, "Can't connect to database"))
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
+	// Wipe all tests in the TestingNamespace
 	if err = cleanSpace(ctx, icingaClientset, contracts.TestingNamespace); err != nil {
 		klog.Fatal(errors.Wrap(err, "Can't clean space"))
 	}
 
 	http.HandleFunc("/test/delete", deleteTests(ctx, icingaClientset))
-	http.HandleFunc("/test/create", createTest(ctx, db, icingaClientset, contracts.TestingNamespace))
+	http.HandleFunc("/test/create", createTest(ctx, db, clientset, icingaClientset, contracts.TestingNamespace))
 
 	klog.Info("Starting server on :8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
@@ -101,6 +127,9 @@ func main() {
 	}
 }
 
+// deleteTests deletes tests specified in the query parameter. The tests are
+// specified as "namespace/testName" and separated by comma. If the namespace
+// and test name are set to "*" all tests in all namespaces will be deleted.
 func deleteTests(
 	ctx context.Context,
 	icingaClientset *icingav1client.Clientset,
@@ -114,20 +143,24 @@ func deleteTests(
 			return
 		}
 
+		// Tests are specified as "namespace/testName" and separated by comma
 		testsToDelete := strings.Split(testsParam, ",")
 		testsToDeletePerNs := make(map[string][]string)
-		skipNamespaces := []string{}
+		var skipNamespaces []string
 
 		for _, test := range testsToDelete {
 			split := strings.Split(test, "/")
 			namespace, name := split[0], split[1]
 
+			// Skip the namespace if one test name in the namespace is set to "*"
 			if slices.Contains(skipNamespaces, namespace) {
 				continue
 			}
 
+			// Store the tests to delete in a map with the namespace as key
 			testsToDeletePerNs[namespace] = append(testsToDeletePerNs[namespace], name)
 
+			// If the test name is set to "*" the namespace will be skipped in future loop passes
 			if name == "*" {
 				testsToDeletePerNs[namespace] = []string{"*"}
 				skipNamespaces = append(skipNamespaces, namespace)
@@ -135,6 +168,8 @@ func deleteTests(
 		}
 
 		for namespace, tests := range testsToDeletePerNs {
+			// If the test name is set to "*" all tests in the namespace will be deleted otherwise
+			// the specified tests will be deleted
 			if tests[0] == "*" {
 				err := icingaClientset.IcingaV1().Tests(namespace).DeleteCollection(
 					ctx,
@@ -166,92 +201,132 @@ func deleteTests(
 	}
 }
 
+// TODO send http status codes -> w.WriteHeader(http.StatusInternalServerError)
+
+// createTest builds a test resource out of the query parameters and deploys it to the cluster.
 func createTest(
 	ctx context.Context,
 	db *sql.DB,
+	clientset *kubernetes.Clientset,
 	icingaClientset *icingav1client.Clientset,
 	namespace string,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		klog.Info("Connection from " + r.RemoteAddr + " to " + r.URL.Path)
 
-		deploymentName := r.URL.Query().Get("deploymentName")
+		resourceType := r.URL.Query().Get("resourceType")
+		resourceName := r.URL.Query().Get("resourceName")
+		description := r.URL.Query().Get("description")
+		expectedPods := r.URL.Query().Get("expectedPods")
 		tests := strings.Split(r.URL.Query().Get("tests"), ":")
-		if len(tests) == 1 && tests[0] == "" {
-			_, _ = fmt.Fprintln(w, "No tests specified")
-			return
-		}
 
-		deploymentNames, err := db.Query("SELECT deployment_name FROM test")
+		// Get resource name for specified resource type
+		resourceNames, err := db.Query(
+			"SELECT resource_name FROM test WHERE resource_type = ? AND resource_name = ?",
+			resourceType,
+			resourceName,
+		)
 		if err != nil {
-			_, _ = fmt.Fprintln(w, "Can't get deployment names from database")
-			klog.Error(errors.Wrap(err, "Can't get deployment names from database"))
+			_, _ = fmt.Fprintln(w, "Can't get resource names from database")
+			klog.Error(errors.Wrap(err, "Can't get resource names from database"))
 			return
 		}
-		defer deploymentNames.Close()
+		defer func() { _ = resourceNames.Close() }()
 
-		for deploymentNames.Next() {
-			var name string
-			_ = deploymentNames.Scan(&name)
+		resourceNames.Next()
+		var name string
 
-			if name == deploymentName {
-				_, _ = fmt.Fprintln(w, fmt.Sprintf("Deployment %s is already in use", deploymentName))
-				klog.Error(errors.New(fmt.Sprintf("Deployment %s is already in use", deploymentName)))
+		_ = resourceNames.Scan(&name)
+
+		// Check if resource name is already in use
+		if name == resourceName {
+			_, _ = fmt.Fprintln(w, fmt.Sprintf("%s '%s' is already in use", resourceType, resourceName))
+			klog.Error(errors.New(fmt.Sprintf("%s '%s' is already in use", resourceType, resourceName)))
+			return
+		}
+
+		expectedPodsInt, _ := strconv.Atoi(expectedPods)
+
+		// Some extra checks for DaemonSet
+		if resourceType == "daemonset" {
+			nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+			if err != nil {
+				_, _ = fmt.Fprintln(w, "Can't get nodes")
+				klog.Error(errors.Wrap(err, "Can't get nodes"))
 				return
 			}
+
+			// Check if there are enough nodes to run tests.
+			// Exit if there are more tests than nodes.
+			if len(nodes.Items) < len(tests) {
+				_, _ = fmt.Fprintln(w, fmt.Sprintf(
+					"Not enough nodes to run tests. Nodes: %d, Tests: %d",
+					len(nodes.Items),
+					len(tests),
+				))
+				klog.Error(errors.New(fmt.Sprintf(
+					"Not enough nodes to run tests. Nodes: %d, Tests: %d",
+					len(nodes.Items),
+					len(tests),
+				)))
+				return
+			}
+
+			// Because expectedPods can't be set for DaemonSet in the
+			// frontend it is set to the number of nodes by default.
+			expectedPodsInt = len(nodes.Items)
 		}
 
-		var testResource *icingav1.Test
-
-		testResource = &icingav1.Test{
+		// Build new test resource out of the query parameters
+		testResource := &icingav1.Test{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      "icinga-for-kubernetes-testing-test-" + randString(10),
+				Name:      "icinga-for-kubernetes-test-" + randString(8),
 				Namespace: namespace,
 			},
 			Spec: icingav1.TestSpec{
-				DeploymentName: deploymentName,
+				ResourceType: resourceType,
+				ResourceName: resourceName,
+				Description:  description,
+				ExpectedPods: int32(expectedPodsInt),
 			},
 		}
 
-		for _, test := range tests {
-			testKind := strings.Split(test, ",")[0]
-			totalReplicas, _ := strconv.Atoi(strings.Split(test, ",")[1])
-			totalReplicas32 := int32(totalReplicas)
+		// Check if tests are specified and if so add them to Spec.Tests of the built test resource
+		if tests[0] != "" {
+			for _, test := range tests {
+				testKind := strings.Split(test, ",")[0]
+				testPercentage, _ := strconv.Atoi(strings.Split(test, ",")[1])
 
-			badReplicas, _ := strconv.Atoi(strings.Split(test, ",")[2])
-			badReplicas32 := int32(badReplicas)
-
-			if totalReplicas32 < badReplicas32 {
-				_, _ = fmt.Fprintln(
-					w,
-					fmt.Sprintf(
-						"Bad replicas count %d is greater than total replicas count %d",
-						badReplicas32,
-						totalReplicas32,
-					),
-				)
-				klog.Error(
-					errors.New(
+				if testPercentage < 1 || testPercentage > 100 {
+					_, _ = fmt.Fprintln(
+						w,
 						fmt.Sprintf(
-							"Bad replicas count %d is greater than total replicas count %d",
-							badReplicas32,
-							totalReplicas32,
+							"Test percentage has to be between 1 and 100! Currently is: %d",
+							testPercentage,
 						),
-					),
-				)
-				return
-			}
+					)
+					klog.Error(
+						errors.New(
+							fmt.Sprintf(
+								"Test percentage has to be between 1 and 100! Currently is: %d",
+								testPercentage,
+							),
+						),
+					)
+					return
+				}
 
-			testResource.Spec.Tests = append(
-				testResource.Spec.Tests,
-				icingav1.TestTest{
-					TestKind:      testKind,
-					TotalReplicas: &totalReplicas32,
-					BadReplicas:   &badReplicas32,
-				},
-			)
+				testResource.Spec.Tests = append(
+					testResource.Spec.Tests,
+					icingav1.TestTest{
+						TestKind:       testKind,
+						TestPercentage: int32(testPercentage),
+					},
+				)
+			}
 		}
 
+		// Deploy the built test resource to the cluster
 		_, err = icingaClientset.IcingaV1().Tests(namespace).Create(ctx, testResource, metav1.CreateOptions{})
 		if err != nil {
 			_, _ = fmt.Fprintln(w, fmt.Sprintf("Can't create test %s", testResource.GetName()))
@@ -259,6 +334,7 @@ func createTest(
 			return
 		}
 
+		// TODO send 200 status code
 		_, _ = fmt.Fprintln(w, fmt.Sprintf("Created test %s", testResource.GetName()))
 		klog.Info(fmt.Sprintf("Created test %s", testResource.GetName()))
 	}

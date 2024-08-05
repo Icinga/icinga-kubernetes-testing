@@ -24,6 +24,7 @@ import (
 	"net"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -84,6 +85,21 @@ type TestController struct {
 	// deploymentsSynced returns true if the Deployment store has been synced at least once
 	deploymentsSynced cache.InformerSynced
 
+	// replicaSetsLister lists ReplicaSets from the shared informer's store
+	replicaSetsLister appslisters.ReplicaSetLister
+	// replicaSetsSynced returns true if the ReplicaSet store has been synced at least once
+	replicaSetsSynced cache.InformerSynced
+
+	// statefulSetsLister lists StatefulSets from the shared informer's store
+	statefulSetsLister appslisters.StatefulSetLister
+	// statefulSetsSynced returns true if the StatefulSet store has been synced at least once
+	statefulSetsSynced cache.InformerSynced
+
+	// daemonsetsLister lists DaemonSets from the shared informer's store
+	daemonsetsLister appslisters.DaemonSetLister
+	// daemonsetsSynced returns true if the DaemonSet store has been synced at least once
+	daemonsetsSynced cache.InformerSynced
+
 	// testsLister lists Test from the shared informer's store
 	testsLister listers.TestLister
 	// testsSynced returns true if the Test store has been synced at least once
@@ -108,6 +124,9 @@ func NewController(
 	kubeclientset kubernetes.Interface,
 	icingaclientset icingav1client.Interface,
 	deploymentInformer appsinformers.DeploymentInformer,
+	replicaSetInformer appsinformers.ReplicaSetInformer,
+	statefulSetInformer appsinformers.StatefulSetInformer,
+	daemonsetInformer appsinformers.DaemonSetInformer,
 	testInformer informers.TestInformer,
 	db *sql.DB,
 ) *TestController {
@@ -131,30 +150,39 @@ func NewController(
 	)
 
 	controller := &TestController{
-		clientset:         kubeclientset,
-		icingaClientset:   icingaclientset,
-		deploymentsLister: deploymentInformer.Lister(),
-		deploymentsSynced: deploymentInformer.Informer().HasSynced,
-		testsLister:       testInformer.Lister(),
-		testsSynced:       testInformer.Informer().HasSynced,
-		workqueue:         workqueue.NewRateLimitingQueue(ratelimiter),
-		recorder:          recorder,
-		db:                db,
+		clientset:          kubeclientset,
+		icingaClientset:    icingaclientset,
+		deploymentsLister:  deploymentInformer.Lister(),
+		deploymentsSynced:  deploymentInformer.Informer().HasSynced,
+		replicaSetsLister:  replicaSetInformer.Lister(),
+		replicaSetsSynced:  replicaSetInformer.Informer().HasSynced,
+		statefulSetsLister: statefulSetInformer.Lister(),
+		statefulSetsSynced: statefulSetInformer.Informer().HasSynced,
+		daemonsetsLister:   daemonsetInformer.Lister(),
+		daemonsetsSynced:   daemonsetInformer.Informer().HasSynced,
+		testsLister:        testInformer.Lister(),
+		testsSynced:        testInformer.Informer().HasSynced,
+		workqueue:          workqueue.NewRateLimitingQueue(ratelimiter),
+		recorder:           recorder,
+		db:                 db,
 	}
 
 	logger.Info("Setting up event handlers")
 	// Set up an event handler for when Test resources change
-	testInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+	_, _ = testInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			test := obj.(*icingav1.Test)
 			_, err := db.Exec(
-				"INSERT INTO test (uuid, name, namespace, uid, resource_version, deployment_name, created) VALUES (?, ?, ?, ?, ?, ?, ?)",
+				"INSERT INTO test (uuid, name, namespace, uid, resource_version, resource_type, resource_name, description, expected_pods, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 				schemav1.EnsureUUID(test.UID),
 				test.Name,
 				test.Namespace,
 				test.UID,
 				test.ResourceVersion,
-				test.Spec.DeploymentName,
+				test.Spec.ResourceType,
+				test.Spec.ResourceName,
+				test.Spec.Description,
+				test.Spec.ExpectedPods,
 				test.ObjectMeta.CreationTimestamp.UnixMilli(),
 			)
 			if err != nil {
@@ -179,19 +207,104 @@ func NewController(
 	// processing. This way, we don't need to implement custom logic for
 	// handling Deployment resources. More info on this pattern:
 	// https://github.com/kubernetes/community/blob/8cafef897a22026d42f5e5bb3f104febe7e29830/contributors/devel/controllers.md
-	deploymentInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+	_, _ = deploymentInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: controller.handleObject(ctx),
 		UpdateFunc: func(old, new interface{}) {
 			newDepl := new.(*appsv1.Deployment)
 			oldDepl := old.(*appsv1.Deployment)
 
 			if *newDepl.Spec.Replicas == newDepl.Status.AvailableReplicas {
-				controller.handleTests(ctx, newDepl)
+				controller.handleDeploymentTests(ctx, newDepl)
 			}
 
 			if newDepl.ResourceVersion == oldDepl.ResourceVersion {
 				// Periodic resync will send update events for all known Deployments.
 				// Two different versions of the same Deployment will always have different RVs.
+				return
+			}
+			controller.handleObject(ctx)(new)
+		},
+		DeleteFunc: controller.handleObject(ctx),
+	})
+
+	_, _ = replicaSetInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			rs := obj.(*appsv1.ReplicaSet)
+			if rs.OwnerReferences != nil {
+				for _, owner := range rs.OwnerReferences {
+					if owner.Kind == "Test" {
+						controller.handleObject(ctx)(obj)
+					}
+				}
+			}
+		},
+		UpdateFunc: func(old, new interface{}) {
+			newRs := new.(*appsv1.ReplicaSet)
+			oldRs := old.(*appsv1.ReplicaSet)
+
+			if newRs.OwnerReferences != nil {
+				for _, owner := range newRs.OwnerReferences {
+					if owner.Kind == "Test" {
+						if *newRs.Spec.Replicas == newRs.Status.AvailableReplicas {
+							controller.handleReplicaSetTests(ctx, newRs)
+						}
+
+						if newRs.ResourceVersion == oldRs.ResourceVersion {
+							// Periodic resync will send update events for all known ReplicaSets.
+							// Two different versions of the same ReplicaSet will always have different RVs.
+							return
+						}
+
+						controller.handleObject(ctx)(new)
+					}
+				}
+			}
+		},
+		DeleteFunc: func(obj interface{}) {
+			rs := obj.(*appsv1.ReplicaSet)
+			if rs.OwnerReferences != nil {
+				for _, owner := range rs.OwnerReferences {
+					if owner.Kind == "Test" {
+						controller.handleObject(ctx)(obj)
+					}
+				}
+			}
+		},
+	})
+
+	_, _ = statefulSetInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: controller.handleObject(ctx),
+		UpdateFunc: func(old, new interface{}) {
+			newSs := new.(*appsv1.StatefulSet)
+			oldSs := old.(*appsv1.StatefulSet)
+
+			if *newSs.Spec.Replicas == newSs.Status.AvailableReplicas {
+				controller.handleStatefulSetTests(ctx, newSs)
+			}
+
+			if newSs.ResourceVersion == oldSs.ResourceVersion {
+				// Periodic resync will send update events for all known ReplicaSets.
+				// Two different versions of the same ReplicaSet will always have different RVs.
+				return
+			}
+			controller.handleObject(ctx)(new)
+		},
+		DeleteFunc: controller.handleObject(ctx),
+	})
+
+	_, _ = daemonsetInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: controller.handleObject(ctx),
+		UpdateFunc: func(old, new interface{}) {
+			newDs := new.(*appsv1.DaemonSet)
+			oldDs := old.(*appsv1.DaemonSet)
+
+			//if *newSs.Spec.Replicas == newSs.Status.AvailableReplicas {
+			controller.handleDaemonSetTests(ctx, newDs)
+			//}
+
+			if newDs.ResourceVersion == oldDs.ResourceVersion {
+				// Periodic resync will send update events for all known ReplicaSets.
+				// Two different versions of the same ReplicaSet will always have different RVs.
 				return
 			}
 			controller.handleObject(ctx)(new)
@@ -260,12 +373,16 @@ func (c *TestController) warmup(ctx context.Context) {
 
 	for _, test := range tests.Items {
 		_, err = c.db.Exec(
-			"INSERT INTO test (uuid, name, namespace, uid, deployment_name, created) VALUES (?, ?, ?, ?, ?, ?)",
+			"INSERT INTO test (uuid, name, namespace, uid, resource_version, resource_type, resource_name, description, expected_pods, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			schemav1.EnsureUUID(test.UID),
 			test.Name,
 			test.Namespace,
 			test.UID,
-			test.Spec.DeploymentName,
+			test.ResourceVersion,
+			test.Spec.ResourceType,
+			test.Spec.ResourceName,
+			test.Spec.Description,
+			test.Spec.ExpectedPods,
 			test.ObjectMeta.CreationTimestamp.UnixMilli(),
 		)
 		if err != nil {
@@ -363,27 +480,36 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 		return err
 	}
 
-	deploymentName := test.Spec.DeploymentName
-	if deploymentName == "" {
+	resourceName := test.Spec.ResourceName
+	if resourceName == "" {
 		// We choose to absorb the error here as the worker would requeue the
 		// resource otherwise. Instead, the next time the resource is updated
 		// the resource will be queued again.
-		utilruntime.HandleError(fmt.Errorf("%s: deployment name must be specified", key))
+		utilruntime.HandleError(fmt.Errorf("%s: resource name must be specified", key))
 		return nil
 	}
 
 	var availableReplicas int32
+	testHashes := make(map[string]string)
 
-	for _, t := range test.Spec.Tests {
+	for i, t := range test.Spec.Tests {
+		//hash := md5.Sum([]byte(t.TestKind + "/" + strconv.Itoa(int(t.TestPercentage))))
+		//testHashes = append(testHashes, fmt.Sprintf("%x", hash))
+		//testHashes["ikt-test-"+strconv.Itoa(i)] = fmt.Sprintf("%x", hash)
+		// TODO use hashes in the future? For now, we'll use the test kind and percentage
+		testHashes["ikt-test-"+strconv.Itoa(i)] = t.TestKind + "." + strconv.Itoa(int(t.TestPercentage))
+	}
 
-		// Get the deployment with the name specified in Test.spec
-		deployment, err := c.deploymentsLister.Deployments(test.Namespace).Get(deploymentName + "-" + t.TestKind)
+	switch {
+	case test.Spec.ResourceType == "deployment":
+		// Get the daemonSet with the name specified in Test.spec
+		deployment, err := c.deploymentsLister.Deployments(test.Namespace).Get(resourceName)
 
 		// If the resource doesn't exist, we'll create it
 		if errors.IsNotFound(err) {
 			deployment, err = c.clientset.AppsV1().Deployments(test.Namespace).Create(
 				ctx,
-				newDeployment(test, t.TotalReplicas, t.BadReplicas, t.TestKind),
+				newDeployment(test, &test.Spec.ExpectedPods, testHashes),
 				metav1.CreateOptions{},
 			)
 		}
@@ -405,29 +531,190 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 		// If this number of the replicas on the Test resource is specified, and the
 		// number does not equal the current desired replicas on the Deployment, we
 		// should update the Deployment resource.
-		if t.TotalReplicas != nil && *t.TotalReplicas != *deployment.Spec.Replicas {
+		if test.Spec.ExpectedPods != *deployment.Spec.Replicas {
 			logger.Info(
-				"Update deployment resource",
+				"Update Deployment resource",
 				"currentReplicas",
-				*t.TotalReplicas,
+				test.Spec.ExpectedPods,
 				"desiredReplicas",
 				*deployment.Spec.Replicas)
 
 			deployment, err = c.clientset.AppsV1().Deployments(test.Namespace).Update(
 				ctx,
-				newDeployment(test, t.TotalReplicas, t.BadReplicas, t.TestKind),
+				newDeployment(test, &test.Spec.ExpectedPods, testHashes),
 				metav1.UpdateOptions{},
 			)
-		}
 
-		// If an error occurs during Update, we'll requeue the item so we can
+			// If an error occurs during Update, we'll requeue the item so we can
+			// attempt processing again later. This could have been caused by a
+			// temporary network failure, or any other transient reason.
+			if err != nil {
+				return err
+			}
+
+			availableReplicas += deployment.Status.AvailableReplicas
+		}
+	case test.Spec.ResourceType == "replicaset":
+		// Get the daemonSet with the name specified in Test.spec
+		replicaSet, err := c.replicaSetsLister.ReplicaSets(test.Namespace).Get(resourceName)
+
+		// If the resource doesn't exist, we'll create it
+		if errors.IsNotFound(err) {
+			replicaSet, err = c.clientset.AppsV1().ReplicaSets(test.Namespace).Create(
+				ctx,
+				newReplicaSet(test, &test.Spec.ExpectedPods, testHashes),
+				metav1.CreateOptions{},
+			)
+		}
+		// If an error occurs during Get/Create, we'll requeue the item so we can
 		// attempt processing again later. This could have been caused by a
 		// temporary network failure, or any other transient reason.
 		if err != nil {
 			return err
 		}
 
-		availableReplicas += deployment.Status.AvailableReplicas
+		// If the Deployment is not controlled by this Test resource, we should log
+		// a warning to the event recorder and return error msg.
+		if !metav1.IsControlledBy(replicaSet, test) {
+			msg := fmt.Sprintf(MessageResourceExists, replicaSet.Name)
+			c.recorder.Event(test, corev1.EventTypeWarning, ErrResourceExists, msg)
+			return fmt.Errorf("%s", msg)
+		}
+
+		// If this number of the replicas on the Test resource is specified, and the
+		// number does not equal the current desired replicas on the Deployment, we
+		// should update the Deployment resource.
+		if test.Spec.ExpectedPods != *replicaSet.Spec.Replicas {
+			logger.Info(
+				"Update ReplicaSet resource",
+				"currentReplicas",
+				test.Spec.ExpectedPods,
+				"desiredReplicas",
+				*replicaSet.Spec.Replicas)
+
+			replicaSet, err = c.clientset.AppsV1().ReplicaSets(test.Namespace).Update(
+				ctx,
+				newReplicaSet(test, &test.Spec.ExpectedPods, testHashes),
+				metav1.UpdateOptions{},
+			)
+
+			// If an error occurs during Update, we'll requeue the item so we can
+			// attempt processing again later. This could have been caused by a
+			// temporary network failure, or any other transient reason.
+			if err != nil {
+				return err
+			}
+
+			availableReplicas += replicaSet.Status.AvailableReplicas
+		}
+	case test.Spec.ResourceType == "statefulset":
+		// Get the daemonSet with the name specified in Test.spec
+		statefulSet, err := c.statefulSetsLister.StatefulSets(test.Namespace).Get(resourceName)
+
+		// If the resource doesn't exist, we'll create it
+		if errors.IsNotFound(err) {
+			statefulSet, err = c.clientset.AppsV1().StatefulSets(test.Namespace).Create(
+				ctx,
+				newStatefulSet(test, &test.Spec.ExpectedPods, testHashes),
+				metav1.CreateOptions{},
+			)
+		}
+		// If an error occurs during Get/Create, we'll requeue the item so we can
+		// attempt processing again later. This could have been caused by a
+		// temporary network failure, or any other transient reason.
+		if err != nil {
+			return err
+		}
+
+		// If the Deployment is not controlled by this Test resource, we should log
+		// a warning to the event recorder and return error msg.
+		if !metav1.IsControlledBy(statefulSet, test) {
+			msg := fmt.Sprintf(MessageResourceExists, statefulSet.Name)
+			c.recorder.Event(test, corev1.EventTypeWarning, ErrResourceExists, msg)
+			return fmt.Errorf("%s", msg)
+		}
+
+		// If this number of the replicas on the Test resource is specified, and the
+		// number does not equal the current desired replicas on the Deployment, we
+		// should update the Deployment resource.
+		if test.Spec.ExpectedPods != *statefulSet.Spec.Replicas {
+			logger.Info(
+				"Update StatefulSet resource",
+				"currentReplicas",
+				test.Spec.ExpectedPods,
+				"desiredReplicas",
+				*statefulSet.Spec.Replicas)
+
+			statefulSet, err = c.clientset.AppsV1().StatefulSets(test.Namespace).Update(
+				ctx,
+				newStatefulSet(test, &test.Spec.ExpectedPods, testHashes),
+				metav1.UpdateOptions{},
+			)
+
+			// If an error occurs during Update, we'll requeue the item so we can
+			// attempt processing again later. This could have been caused by a
+			// temporary network failure, or any other transient reason.
+			if err != nil {
+				return err
+			}
+
+			availableReplicas += statefulSet.Status.AvailableReplicas
+		}
+	case test.Spec.ResourceType == "daemonset":
+		// Get the DaemonSet with the name specified in Test.spec
+		daemonSet, err := c.daemonsetsLister.DaemonSets(test.Namespace).Get(resourceName)
+
+		// If the resource doesn't exist, we'll create it
+		if errors.IsNotFound(err) {
+			daemonSet, err = c.clientset.AppsV1().DaemonSets(test.Namespace).Create(
+				ctx,
+				newDaemonSet(test, &test.Spec.ExpectedPods, testHashes),
+				metav1.CreateOptions{},
+			)
+		}
+		// If an error occurs during Get/Create, we'll requeue the item so we can
+		// attempt processing again later. This could have been caused by a
+		// temporary network failure, or any other transient reason.
+		if err != nil {
+			return err
+		}
+
+		// If the Deployment is not controlled by this Test resource, we should log
+		// a warning to the event recorder and return error msg.
+		if !metav1.IsControlledBy(daemonSet, test) {
+			msg := fmt.Sprintf(MessageResourceExists, daemonSet.Name)
+			c.recorder.Event(test, corev1.EventTypeWarning, ErrResourceExists, msg)
+			return fmt.Errorf("%s", msg)
+		}
+	// If this number of the replicas on the Test resource is specified, and the
+	// number does not equal the current desired replicas on the Deployment, we
+	// should update the Deployment resource.
+	// TODO Do we need to check some similar?
+	//if test.Spec.ExpectedPods != *daemonSet.Spec.Replicas {
+	//	logger.Info(
+	//		"Update StatefulSet resource",
+	//		"currentReplicas",
+	//		test.Spec.ExpectedPods,
+	//		"desiredReplicas",
+	//		*daemonSet.Spec.Replicas)
+	//
+	//	daemonSet, err = c.clientset.AppsV1().StatefulSets(test.Namespace).Update(
+	//		ctx,
+	//		newStatefulSet(test, &test.Spec.ExpectedPods, testHashes),
+	//		metav1.UpdateOptions{},
+	//	)
+	//
+	//	// If an error occurs during Update, we'll requeue the item so we can
+	//	// attempt processing again later. This could have been caused by a
+	//	// temporary network failure, or any other transient reason.
+	//	if err != nil {
+	//		return err
+	//	}
+	//
+	//	availableReplicas += daemonSet.Status.AvailableReplicas
+	//}
+	default:
+		return fmt.Errorf("unknown resource type %s", test.Spec.ResourceType)
 	}
 
 	// Finally, we update the status block of the Test resource to reflect the
@@ -445,12 +732,12 @@ func (c *TestController) syncHandler(ctx context.Context, key string) error {
 }
 
 // updateTestStatus takes a Test resource and updates its Status.AvailableReplicas
-func (c *TestController) updateTestStatus(ctx context.Context, test *icingav1.Test, availableReplicas int32) error {
+func (c *TestController) updateTestStatus(ctx context.Context, test *icingav1.Test, availablePods int32) error {
 	// NEVER modify objects from the store. It's a read-only, local cache.
 	// You can use DeepCopy() to make a deep copy of original object and modify this copy
 	// Or create a copy manually for better performance
 	testCopy := test.DeepCopy()
-	testCopy.Status.AvailableReplicas = availableReplicas
+	testCopy.Status.AvailablePods = availablePods
 	// If the CustomResourceSubresources feature gate is not enabled,
 	// we must use Update instead of UpdateStatus to update the Status block of the Test resource.
 	// UpdateStatus will not allow changes to the Spec of the resource,
@@ -505,7 +792,6 @@ func (c *TestController) handleObject(ctx context.Context) func(obj interface{})
 		if ownerRef := metav1.GetControllerOf(object); ownerRef != nil {
 			// If this object is not owned by a Test, we should not do anything more
 			// with it.
-			fmt.Println(ownerRef)
 
 			if ownerRef.Kind != "Test" {
 				return
@@ -529,16 +815,28 @@ func (c *TestController) handleObject(ctx context.Context) func(obj interface{})
 	}
 }
 
-// handleTests will handle the tests for a deployment by listing the pods and
-// patching the pods to have a label 'tester=true' in the number of the badReplicas.
-// For that, it will connect to the pod via a tcp connection and send a message to the pod.
-func (c *TestController) handleTests(ctx context.Context, deployment *appsv1.Deployment) {
+// handleDeploymentTests will handle the tests for a Deployment by listing the pods and
+// patching the pods to have a label 'test' with the test as value. For that,
+// it will connect to the pod via a tcp connection and send a message to the pod.
+func (c *TestController) handleDeploymentTests(ctx context.Context, deployment *appsv1.Deployment) {
 	logger := klog.FromContext(ctx)
 
 	logger.Info("Handling tests", "deployment", deployment.Name)
 
+	var tests []string
+
+	// Loop through the labels of the deployment and determine the desired tests
+	for labelKey, labelValue := range deployment.Labels {
+		// If string has the prefix 'ikt-test-' we know it is a test label
+		if strings.HasPrefix(labelKey, "ikt-test-") {
+			tests = append(tests, labelValue)
+		}
+	}
+
+	// Convert the deployment selector match labels to a label selector
 	labelSelector := metav1.FormatLabelSelector(metav1.SetAsLabelSelector(deployment.Spec.Selector.MatchLabels))
 
+	// List the pods for this deployment
 	pods, err := c.clientset.CoreV1().Pods(deployment.Namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector,
 	})
@@ -547,92 +845,453 @@ func (c *TestController) handleTests(ctx context.Context, deployment *appsv1.Dep
 		return
 	}
 
-	replicas := int(*deployment.Spec.Replicas)
-	badReplicas, _ := strconv.Atoi(deployment.Labels["badReplicas"])
-	tester := 0
+	var missingTests []string
 
-	for _, pod := range pods.Items {
-		if pod.Labels["tester"] == "true" {
-			klog.Info(fmt.Sprintf("Already tester: %s", pod.Name))
-			tester++
+	// Check which tests are missing
+	for _, test := range tests {
+		testMissing := true
+		for _, pod := range pods.Items {
+			// Check if the pod has the label 'test' with the value of the current test
+			if test == pod.Labels["test"] {
+				testMissing = false
+				break
+			}
+		}
+		// If no pod has the label 'test' with the value of the current test,
+		// we add it to the missingTests slice
+		if testMissing {
+			missingTests = append(missingTests, test)
 		}
 	}
 
-	if tester != badReplicas {
-		var index int
-		var usedIndexes []int
+	var index int
+	var usedIndexes []int
 
-		for i := 0; i < badReplicas-tester; i++ {
-			if replicas == 1 {
-				index = 0
-			} else {
-				index = rand.IntnRange(0, len(pods.Items))
-				for slices.Contains(usedIndexes, index) || pods.Items[index].Labels["tester"] == "true" {
-					index = rand.IntnRange(0, len(pods.Items))
-				}
+	for _, test := range missingTests {
+		// Get a random pod that doesn't have the label 'test' yet
+		index = rand.IntnRange(0, len(pods.Items))
+		for slices.Contains(usedIndexes, index) || pods.Items[index].Labels["test"] != "" {
+			index = rand.IntnRange(0, len(pods.Items))
+		}
+
+		// Get the pod and create a socket connection to it.
+		pod := pods.Items[index]
+		socket := fmt.Sprintf("%s:%s", pod.Status.PodIP, "8080")
+		var conn net.Conn
+
+		// TODO rename j to i?
+		// Try to connect to the pod via tcp 3 times.
+		// If it still fails, log the error and return.
+		for j := 0; j < 3; j++ {
+			conn, err = net.Dial("tcp", socket)
+			if err == nil {
+				break
 			}
 
-			pod := pods.Items[index]
-			socket := fmt.Sprintf("%s:%s", pod.Status.PodIP, "8080")
-			var conn net.Conn
+			logger.Error(err, "Error connecting to pod via tcp", "pod", pod.Name, "socket", socket, "attempt", j+1)
+			time.Sleep(5 * time.Second)
+		}
 
-			for j := 0; j < 3; j++ {
-				conn, err = net.Dial("tcp", socket)
-				if err == nil {
-					break
-				}
+		if err != nil {
+			logger.Error(err, "Failed to connect to pod after 3 attempts", "pod", pod.Name, "socket", socket)
+			return
+		}
+		defer func() { _ = conn.Close() }()
 
-				logger.Error(err, "Error connecting to pod via tcp", "pod", pod.Name, "socket", socket, "attempt", j+1)
-				time.Sleep(5 * time.Second)
-			}
+		logger.Info(fmt.Sprintf("Successfully connected to pod %s via tcp socket: %s", pod.Name, socket))
 
-			if err != nil {
-				logger.Error(err, "Failed to connect to pod after 3 attempts", "pod", pod.Name, "socket", socket)
-				return
-			}
-			defer conn.Close()
+		// Send the test configuration to the pod via the tcp connection.
+		writer := bufio.NewWriter(conn)
+		_, err = writer.WriteString(fmt.Sprintf("test: %s\n", test))
+		if err != nil {
+			logger.Error(err, "Error writing config to writer", "pod", pod.Name, "socket", socket)
+			return
+		}
 
-			writer := bufio.NewWriter(conn)
-			_, err = writer.WriteString(fmt.Sprintf("test: %s\n", deployment.Labels["testKind"]))
-			if err != nil {
-				logger.Error(err, "Error writing to pod", "pod", pod.Name, "socket", socket)
-				return
-			}
-			err = writer.Flush()
-			if err != nil {
-				logger.Error(err, "Error flushing writer", "pod", pod.Name, "socket", socket)
-				return
-			}
+		err = writer.Flush()
+		if err != nil {
+			logger.Error(err, "Error sending config", "pod", pod.Name, "socket", socket)
+			return
+		}
 
-			_, err = c.clientset.CoreV1().Pods(deployment.Namespace).Patch(
-				ctx,
-				pod.Name,
-				types.JSONPatchType,
-				[]byte(fmt.Sprintf(`[{"op": "add", "path": "/metadata/labels/tester", "value": "true"}]`)),
-				metav1.PatchOptions{},
-			)
-			if err != nil {
-				logger.Error(err, "Error patching pod", "pod", pod.Name)
-				return
-			}
+		logger.Info(fmt.Sprintf("Successfully sent test %s to pod %s", test, pod.Name))
 
-			usedIndexes = append(usedIndexes, index)
+		// Patch the 'test' label to the pod with the value of the current test
+		_, err = c.clientset.CoreV1().Pods(deployment.Namespace).Patch(
+			ctx,
+			pod.Name,
+			types.JSONPatchType,
+			[]byte(fmt.Sprintf(`[{"op": "add", "path": "/metadata/labels/test", "value": "%s"}]`, test)),
+			metav1.PatchOptions{},
+		)
+		if err != nil {
+			logger.Error(err, "Error patching tester label", "pod", pod.Name)
+			return
+		}
+
+		// Add the index to the usedIndexes slice to prevent using the same pod twice
+		usedIndexes = append(usedIndexes, index)
+	}
+}
+
+// handleReplicaSetTests will handle the tests for a ReplicaSet by listing the pods and
+// patching the pods to have a label 'test' with the test as value. For that,
+// it will connect to the pod via a tcp connection and send a message to the pod.
+func (c *TestController) handleReplicaSetTests(ctx context.Context, replicaSet *appsv1.ReplicaSet) {
+	logger := klog.FromContext(ctx)
+
+	logger.Info("Handling tests", "ReplicaSet", replicaSet.Name)
+
+	var tests []string
+
+	// Loop through the labels of the ReplicaSet and determine the desired tests
+	for labelKey, labelValue := range replicaSet.Labels {
+		// If string has the prefix 'ikt-test-' we know it is a test label
+		if strings.HasPrefix(labelKey, "ikt-test-") {
+			tests = append(tests, labelValue)
 		}
 	}
 
-	//for _, pod := range pods.Items {
-	//	logger.Info("Pod of Deployment", "deployment", deployment.Name, "pod", pod.Name, "pod ip", pod.Status.PodIP)
-	//}
+	// Convert the ReplicaSet selector match labels to a label selector
+	labelSelector := metav1.FormatLabelSelector(metav1.SetAsLabelSelector(replicaSet.Spec.Selector.MatchLabels))
+
+	// List the pods for this ReplicaSet
+	pods, err := c.clientset.CoreV1().Pods(replicaSet.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+	if err != nil {
+		logger.Error(err, "Error listing pods")
+		return
+	}
+
+	var missingTests []string
+
+	// Check which tests are missing
+	for _, test := range tests {
+		testMissing := true
+		for _, pod := range pods.Items {
+			// Check if the pod has the label 'test' with the value of the current test
+			if test == pod.Labels["test"] {
+				testMissing = false
+				break
+			}
+		}
+		// If no pod has the label 'test' with the value of the current test,
+		// we add it to the missingTests slice
+		if testMissing {
+			missingTests = append(missingTests, test)
+		}
+	}
+
+	var index int
+	var usedIndexes []int
+
+	for _, test := range missingTests {
+		// Get a random pod that doesn't have the label 'test' yet
+		index = rand.IntnRange(0, len(pods.Items))
+		for slices.Contains(usedIndexes, index) || pods.Items[index].Labels["test"] != "" {
+			index = rand.IntnRange(0, len(pods.Items))
+		}
+
+		// Get the pod and create a socket connection to it.
+		pod := pods.Items[index]
+		socket := fmt.Sprintf("%s:%s", pod.Status.PodIP, "8080")
+		var conn net.Conn
+
+		// Try to connect to the pod via tcp 3 times.
+		// If it still fails, log the error and return.
+		for j := 0; j < 3; j++ {
+			conn, err = net.Dial("tcp", socket)
+			if err == nil {
+				break
+			}
+
+			logger.Error(err, "Error connecting to pod via tcp", "pod", pod.Name, "socket", socket, "attempt", j+1)
+			time.Sleep(5 * time.Second)
+		}
+
+		if err != nil {
+			logger.Error(err, "Failed to connect to pod after 3 attempts", "pod", pod.Name, "socket", socket)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		// Send the test configuration to the pod via the tcp connection.
+		writer := bufio.NewWriter(conn)
+		_, err = writer.WriteString(fmt.Sprintf("test: %s\n", test))
+		if err != nil {
+			logger.Error(err, "Error writing config to writer", "pod", pod.Name, "socket", socket)
+			return
+		}
+		err = writer.Flush()
+		if err != nil {
+			logger.Error(err, "Error sending config", "pod", pod.Name, "socket", socket)
+			return
+		}
+
+		// Patch the 'test' label to the pod with the value of the current test
+		_, err = c.clientset.CoreV1().Pods(replicaSet.Namespace).Patch(
+			ctx,
+			pod.Name,
+			types.JSONPatchType,
+			[]byte(fmt.Sprintf(`[{"op": "add", "path": "/metadata/labels/test", "value": "%s"}]`, test)),
+			metav1.PatchOptions{},
+		)
+		if err != nil {
+			logger.Error(err, "Error patching tester label", "pod", pod.Name)
+			return
+		}
+
+		// Add the index to the usedIndexes slice to prevent using the same pod twice
+		usedIndexes = append(usedIndexes, index)
+	}
+}
+
+// handleStatefulSetTests will handle the tests for a StatefulSet by listing the pods and
+// patching the pods to have a label 'test' with the test as value. For that,
+// it will connect to the pod via a tcp connection and send a message to the pod.
+func (c *TestController) handleStatefulSetTests(ctx context.Context, statefulSet *appsv1.StatefulSet) {
+	logger := klog.FromContext(ctx)
+
+	logger.Info("Handling tests", "StatefulSet", statefulSet.Name)
+
+	var tests []string
+
+	// Loop through the labels of the StatefulSet and determine the desired tests
+	for labelKey, labelValue := range statefulSet.Labels {
+		// If string has the prefix 'ikt-test-' we know it is a test label
+		if strings.HasPrefix(labelKey, "ikt-test-") {
+			tests = append(tests, labelValue)
+		}
+	}
+
+	// Convert the StatefulSet selector match labels to a label selector
+	labelSelector := metav1.FormatLabelSelector(metav1.SetAsLabelSelector(statefulSet.Spec.Selector.MatchLabels))
+
+	// List the pods for this StatefulSet
+	pods, err := c.clientset.CoreV1().Pods(statefulSet.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+	if err != nil {
+		logger.Error(err, "Error listing pods")
+		return
+	}
+
+	var missingTests []string
+
+	// Check which tests are missing
+	for _, test := range tests {
+		testMissing := true
+		for _, pod := range pods.Items {
+			// Check if the pod has the label 'test' with the value of the current test
+			if test == pod.Labels["test"] {
+				testMissing = false
+				break
+			}
+		}
+		// If no pod has the label 'test' with the value of the current test,
+		// we add it to the missingTests slice
+		if testMissing {
+			missingTests = append(missingTests, test)
+		}
+	}
+
+	var index int
+	var usedIndexes []int
+
+	for _, test := range missingTests {
+		// Get a random pod that doesn't have the label 'test' yet
+		index = rand.IntnRange(0, len(pods.Items))
+		for slices.Contains(usedIndexes, index) || pods.Items[index].Labels["test"] != "" {
+			index = rand.IntnRange(0, len(pods.Items))
+		}
+
+		// Get the pod and create a socket connection to it.
+		pod := pods.Items[index]
+		socket := fmt.Sprintf("%s:%s", pod.Status.PodIP, "8080")
+		var conn net.Conn
+
+		// Try to connect to the pod via tcp 3 times.
+		// If it still fails, log the error and return.
+		for j := 0; j < 3; j++ {
+			conn, err = net.Dial("tcp", socket)
+			if err == nil {
+				break
+			}
+
+			logger.Error(err, "Error connecting to pod via tcp", "pod", pod.Name, "socket", socket, "attempt", j+1)
+			time.Sleep(5 * time.Second)
+		}
+
+		if err != nil {
+			logger.Error(err, "Failed to connect to pod after 3 attempts", "pod", pod.Name, "socket", socket)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		// Send the test configuration to the pod via the tcp connection.
+		writer := bufio.NewWriter(conn)
+		_, err = writer.WriteString(fmt.Sprintf("test: %s\n", test))
+		if err != nil {
+			logger.Error(err, "Error writing config to writer", "pod", pod.Name, "socket", socket)
+			return
+		}
+		err = writer.Flush()
+		if err != nil {
+			logger.Error(err, "Error sending config", "pod", pod.Name, "socket", socket)
+			return
+		}
+
+		// Patch the 'test' label to the pod with the value of the current test
+		_, err = c.clientset.CoreV1().Pods(statefulSet.Namespace).Patch(
+			ctx,
+			pod.Name,
+			types.JSONPatchType,
+			[]byte(fmt.Sprintf(`[{"op": "add", "path": "/metadata/labels/test", "value": "%s"}]`, test)),
+			metav1.PatchOptions{},
+		)
+		if err != nil {
+			logger.Error(err, "Error patching tester label", "pod", pod.Name)
+			return
+		}
+
+		// Add the index to the usedIndexes slice to prevent using the same pod twice
+		usedIndexes = append(usedIndexes, index)
+	}
+}
+
+// handleDaemonSetTests will handle the tests for a DaemonSet by listing the pods and
+// patching the pods to have a label 'test' with the test as value. For that,
+// it will connect to the pod via a tcp connection and send a message to the pod.
+func (c *TestController) handleDaemonSetTests(ctx context.Context, daemonSet *appsv1.DaemonSet) {
+	logger := klog.FromContext(ctx)
+
+	logger.Info("Handling tests", "DaemonSet", daemonSet.Name)
+
+	var tests []string
+
+	// Loop through the labels of the DaemonSet and determine the desired tests
+	for labelKey, labelValue := range daemonSet.Labels {
+		// If string has the prefix 'ikt-test-' we know it is a test label
+		if strings.HasPrefix(labelKey, "ikt-test-") {
+			tests = append(tests, labelValue)
+		}
+	}
+
+	// Convert the DaemonSet selector match labels to a label selector
+	labelSelector := metav1.FormatLabelSelector(metav1.SetAsLabelSelector(daemonSet.Spec.Selector.MatchLabels))
+
+	// List the pods for this DaemonSet
+	pods, err := c.clientset.CoreV1().Pods(daemonSet.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+	if err != nil {
+		logger.Error(err, "Error listing pods")
+		return
+	}
+
+	var missingTests []string
+
+	// Check which tests are missing
+	for _, test := range tests {
+		testMissing := true
+		for _, pod := range pods.Items {
+			// Check if the pod has the label 'test' with the value of the current test
+			if test == pod.Labels["test"] {
+				testMissing = false
+				break
+			}
+		}
+		// If no pod has the label 'test' with the value of the current test,
+		// we add it to the missingTests slice
+		if testMissing {
+			missingTests = append(missingTests, test)
+		}
+	}
+
+	var index int
+	var usedIndexes []int
+
+	for _, test := range missingTests {
+		// Get a random pod that doesn't have the label 'test' yet
+		index = rand.IntnRange(0, len(pods.Items))
+		for slices.Contains(usedIndexes, index) || pods.Items[index].Labels["test"] != "" {
+			index = rand.IntnRange(0, len(pods.Items))
+		}
+
+		// Get the pod and create a socket connection to it.
+		pod := pods.Items[index]
+		socket := fmt.Sprintf("%s:%s", pod.Status.PodIP, "8080")
+		var conn net.Conn
+
+		// Try to connect to the pod via tcp 3 times.
+		// If it still fails, log the error and return.
+		for j := 0; j < 3; j++ {
+			conn, err = net.Dial("tcp", socket)
+			if err == nil {
+				break
+			}
+
+			logger.Error(err, "Error connecting to pod via tcp", "pod", pod.Name, "socket", socket, "attempt", j+1)
+			time.Sleep(5 * time.Second)
+		}
+
+		if err != nil {
+			logger.Error(err, "Failed to connect to pod after 3 attempts", "pod", pod.Name, "socket", socket)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		// Send the test configuration to the pod via the tcp connection.
+		writer := bufio.NewWriter(conn)
+		_, err = writer.WriteString(fmt.Sprintf("test: %s\n", test))
+		if err != nil {
+			logger.Error(err, "Error writing config to writer", "pod", pod.Name, "socket", socket)
+			return
+		}
+		err = writer.Flush()
+		if err != nil {
+			logger.Error(err, "Error sending config", "pod", pod.Name, "socket", socket)
+			return
+		}
+
+		// Patch the 'test' label to the pod with the value of the current test
+		_, err = c.clientset.CoreV1().Pods(daemonSet.Namespace).Patch(
+			ctx,
+			pod.Name,
+			types.JSONPatchType,
+			[]byte(fmt.Sprintf(`[{"op": "add", "path": "/metadata/labels/test", "value": "%s"}]`, test)),
+			metav1.PatchOptions{},
+		)
+		if err != nil {
+			logger.Error(err, "Error patching tester label", "pod", pod.Name)
+			return
+		}
+
+		logger.Info("Successfully assigned test to pod", "pod", pod.Name, "test", test)
+
+		// Add the index to the usedIndexes slice to prevent using the same pod twice
+		usedIndexes = append(usedIndexes, index)
+	}
 }
 
 // newDeployment creates a new Deployment for a Test resource. It also sets
 // the appropriate OwnerReferences on the resource so handleObject can discover the Test
-// resource that 'owns' it. Additionally, it mounts a ConfigMap to the container.
-func newDeployment(test *icingav1.Test, replicas *int32, badReplicas *int32, testKind string) *appsv1.Deployment {
-	deploymentName := test.Spec.DeploymentName + "-" + testKind
-	labels := map[string]string{
+// resource that 'owns' it.
+func newDeployment(test *icingav1.Test, replicas *int32, testHashes map[string]string) *appsv1.Deployment {
+	deploymentName := test.Spec.ResourceName
+	podLabels := map[string]string{
 		contracts.TestingLabel: "true",
 		"deploymentName":       deploymentName,
+	}
+
+	labels := map[string]string{
+		contracts.TestingLabel: "true",
+		"expectedReplicas":     strconv.Itoa(int(*replicas)),
+	}
+
+	for k, v := range testHashes {
+		labels[k] = v
 	}
 
 	return &appsv1.Deployment{
@@ -642,20 +1301,168 @@ func newDeployment(test *icingav1.Test, replicas *int32, badReplicas *int32, tes
 			OwnerReferences: []metav1.OwnerReference{
 				*metav1.NewControllerRef(test, icingav1.SchemeGroupVersion.WithKind("Test")),
 			},
-			Labels: map[string]string{
-				contracts.TestingLabel: "true",
-				"badReplicas":          strconv.Itoa(int(*badReplicas)),
-				"testKind":             testKind,
-			},
+			Labels: labels,
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: replicas,
 			Selector: &metav1.LabelSelector{
-				MatchLabels: labels,
+				MatchLabels: podLabels,
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
+					Labels: podLabels,
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:            "tester",
+							Image:           "ikt-tester",
+							ImagePullPolicy: "Never",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// newReplicaSet creates a new ReplicaSet for a Test resource. It also sets
+// the appropriate OwnerReferences on the resource so handleObject can discover the Test
+// resource that 'owns' it.
+func newReplicaSet(test *icingav1.Test, replicas *int32, testHashes map[string]string) *appsv1.ReplicaSet {
+	replicaSetName := test.Spec.ResourceName
+	podLabels := map[string]string{
+		contracts.TestingLabel: "true",
+		"replicaSetName":       replicaSetName,
+	}
+
+	labels := map[string]string{
+		contracts.TestingLabel: "true",
+		"expectedReplicas":     strconv.Itoa(int(*replicas)),
+	}
+
+	for k, v := range testHashes {
+		labels[k] = v
+	}
+
+	return &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      replicaSetName,
+			Namespace: test.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(test, icingav1.SchemeGroupVersion.WithKind("Test")),
+			},
+			Labels: labels,
+		},
+		Spec: appsv1.ReplicaSetSpec{
+			Replicas: replicas,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: podLabels,
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: podLabels,
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:            "tester",
+							Image:           "ikt-tester",
+							ImagePullPolicy: "Never",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// newStatefulSet creates a new StatefulSet for a Test resource. It also sets
+// the appropriate OwnerReferences on the resource so handleObject can discover the Test
+// resource that 'owns' it.
+func newStatefulSet(test *icingav1.Test, replicas *int32, testHashes map[string]string) *appsv1.StatefulSet {
+	statefulSetName := test.Spec.ResourceName
+	podLabels := map[string]string{
+		contracts.TestingLabel: "true",
+		"statefulSetName":      statefulSetName,
+	}
+
+	labels := map[string]string{
+		contracts.TestingLabel: "true",
+		"expectedReplicas":     strconv.Itoa(int(*replicas)),
+	}
+
+	for k, v := range testHashes {
+		labels[k] = v
+	}
+
+	return &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      statefulSetName,
+			Namespace: test.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(test, icingav1.SchemeGroupVersion.WithKind("Test")),
+			},
+			Labels: labels,
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: replicas,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: podLabels,
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: podLabels,
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:            "tester",
+							Image:           "ikt-tester",
+							ImagePullPolicy: "Never",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// newDaemonSet creates a new DaemonSet for a Test resource. It also sets
+// the appropriate OwnerReferences on the resource so handleObject can discover the Test
+// resource that 'owns' it.
+func newDaemonSet(test *icingav1.Test, replicas *int32, testHashes map[string]string) *appsv1.DaemonSet {
+	daemonSetName := test.Spec.ResourceName
+	podLabels := map[string]string{
+		contracts.TestingLabel: "true",
+		"daemonSetName":        daemonSetName,
+	}
+
+	labels := map[string]string{
+		contracts.TestingLabel: "true",
+		"expectedReplicas":     strconv.Itoa(int(*replicas)),
+	}
+
+	for k, v := range testHashes {
+		labels[k] = v
+	}
+
+	return &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      daemonSetName,
+			Namespace: test.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(test, icingav1.SchemeGroupVersion.WithKind("Test")),
+			},
+			Labels: labels,
+		},
+		Spec: appsv1.DaemonSetSpec{
+			Selector: &metav1.LabelSelector{
+				MatchLabels: podLabels,
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: podLabels,
 				},
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
