@@ -7,19 +7,21 @@ import (
 
 // TestTest defines a test to be run
 type TestTest struct {
-	TestKind      string `json:"testKind"`
-	TotalReplicas *int32 `json:"totalReplicas"`
-	BadReplicas   *int32 `json:"badReplicas"`
+	TestKind       string `json:"testKind"`
+	TestPercentage int32  `json:"testPercentage"`
 }
 
 // TestSpec defines the desired state of Test
 type TestSpec struct {
-	DeploymentName string     `json:"deploymentName"`
-	Tests          []TestTest `json:"tests"`
+	ResourceType string     `json:"resourceType"`
+	ResourceName string     `json:"resourceName"`
+	Description  string     `json:"description"`
+	ExpectedPods int32      `json:"expectedPods"`
+	Tests        []TestTest `json:"tests"`
 }
 
 type TestStatus struct {
-	AvailableReplicas int32 `json:"availableReplicas"`
+	AvailablePods int32 `json:"availablePods"`
 }
 
 // +genclient

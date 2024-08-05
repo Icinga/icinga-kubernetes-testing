@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/klog/v2"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -70,7 +71,7 @@ func main() {
 
 	ctx := context.Background()
 
-	switch config.Test {
+	switch strings.Split(config.Test, ".")[0] {
 	case "cpu":
 		err := startCpuTest(ctx)
 		if err != nil {
@@ -81,7 +82,12 @@ func main() {
 		if err != nil {
 			klog.Error(errors.Wrap(err, "Failed to start memory test"))
 		}
+	default:
+		klog.Error("Unknown test type")
 	}
+
+	stop := make(chan struct{})
+	<-stop
 }
 
 func getConfigFromPort(port string) testConfig {
@@ -89,7 +95,7 @@ func getConfigFromPort(port string) testConfig {
 	if err != nil {
 		klog.Error(errors.Wrap(err, "Failed to listen on port 8080"))
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	klog.Info(fmt.Sprintf("Listening on port %s", port))
 
@@ -99,7 +105,9 @@ func getConfigFromPort(port string) testConfig {
 			klog.Error(errors.Wrap(err, "Failed to accept connection"))
 			continue
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
+
+		klog.Info("Connection accepted")
 
 		reader := bufio.NewReader(conn)
 		message, err := reader.ReadString('\n')

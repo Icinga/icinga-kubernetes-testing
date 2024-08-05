@@ -11,7 +11,6 @@ RUN go build -o /go/bin/testing-controller cmd/test-controller/main.go
 FROM scratch
 
 WORKDIR /go/bin/
-COPY --from=alpine /tmp /tmp
 COPY --from=builder /go/bin/testing-controller ./testing-controller
 
 ENTRYPOINT ["./testing-controller"]

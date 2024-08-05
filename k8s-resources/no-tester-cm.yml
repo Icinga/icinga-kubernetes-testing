@@ -1,8 +1,0 @@
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: icinga-for-kubernetes-testing-no-tester-config
-  namespace: testing
-data:
-  IK_TEST: ""

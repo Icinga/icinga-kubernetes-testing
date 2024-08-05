@@ -93,13 +93,16 @@ func main() {
 	if err != nil {
 		klog.Fatal(errors.Wrap(err, "Can't connect to database"))
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	c := controller.NewController(
 		ctx,
 		clientset,
 		icingaClientset,
 		kubeInformerFactory.Apps().V1().Deployments(),
+		kubeInformerFactory.Apps().V1().ReplicaSets(),
+		kubeInformerFactory.Apps().V1().StatefulSets(),
+		kubeInformerFactory.Apps().V1().DaemonSets(),
 		icingaInformerFactory.Icinga().V1().Tests(),
 		db,
 	)

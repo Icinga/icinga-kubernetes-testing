@@ -4,54 +4,42 @@
 
 ### Controller
 Git-Repo: https://github.com/Icinga/icinga-kubernetes-testing
-- Deployed when the ktesting module gets enabled
-- API to deploy Tester Pods
-- API to config tests
-- Write tests to database
+- Watch for test resource changes in Kubernetes
+- Create the correct resource for the test (One of Deployment, StatefulSet, DaemonSet, ReplicaSet)
+- Ensure that the correct number of tester pods are running
+- Send test configuration to tester pods via tcp connection
+
+### API
+Git-Repo: https://github.com/Icinga/icinga-kubernetes-testing
+- Listen to port 8080 for http connection
+- Create/Delete tests via API
 
 #### API endpoints
 
 **/manage/create**
 Parameters:
-- n (int): Number of Tester Pods to create
-- requestCpu (str): CPU request for each Tester Pod
-- requestMemory (str): Memory request for each Tester Pod
-- limitCpu (str): CPU limit for each Tester Pod
-- limitMemory (str): Memory limit for each Tester Pod
+- resourceType (str): Type of resource to test on (One of Deployment, StatefulSet, DaemonSet, ReplicaSet)
+- resourceName (str): Name of the resource to test on
+- description (str): Description of the test
+- expectedPods (int): Number of Pods expected to be running
+- tests (list): List of tests to run
+  - tests[].kind (str): Type of test (e.g. cpu, memory, etc.)
+  - tests[].percentage (int): Intensity of test in percent
 
 **/manage/delete**
-- names (list): Names of Tester Pods to delete separated by comma
+- tests (list): Tests to delete seperated by comma
+  - tests[].namespace (str): Namespace of the test
+  - tests[].name (str): Name of the test ('*' to delete all tests in given namespace)
 
-**/manage/wipe**  
-no parameters
 
 ### Tester
 Git-Repo: https://github.com/Icinga/icinga-kubernetes-testing
-- Read tests from database
-  - On start and then periodically
-- Run tests
+- Listen to port 8080 for tcp connection
+- Get yaml configuration from tcp connection 
+- Run test specified in the configuration
 
 ### Icingaweb2 Module
 Git-Repo: https://github.com/Icinga/icinga-kubernetes-testing-web
-- List/Create/Manage Tester Pods 
-- Start/End Tests
-
-## Concepts
-
-### How to make tests permanent
-- Database to store which pod should run which test
-
-### List testing pods and more information
-- Namespace 'testing'
-- Controller Pod is named/labeled with 'icinga-kubernetes-testing-controller'
-- Tester Pods are named/labeled with 'icinga-kubernetes-testing-tester'
-
-### How does Web communicate with Tester Pods
-- Web calls Controller API
-- Controller knows all Tester Pods
-- Controller writes to database
-- Tester Pods read from database (On start and then periodically)
-
-### How to deploy the testing pods via Web
-- Web calls Controller API to deploy Tester Pods
-- Requests and limits can be set via API
+- Create/Delete tests via API
+- Show information about tests and the depending pods
+- Manage templates to create tests out of it
